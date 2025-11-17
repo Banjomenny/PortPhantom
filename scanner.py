@@ -2,6 +2,7 @@ import argparse
 import ipaddress
 import socket
 import sys
+import threading
 import time
 
 #list of common ports to check against
@@ -64,7 +65,7 @@ def parse_arguments():
     #allows for nice CLI argument parsing
     parser = argparse.ArgumentParser()
     parser.add_argument("-a", "--address", action='store', dest='address', required=True,help="you can use CIDR notation or a something like 1.1.1.1-100. or specify single host")
-    parser.add_argument('--mode', choices=['common', 'range', 'all'], required=False, default='common',help='common is 1-1024, range you specify --startport and --endport and all is 1-65535')
+    parser.add_argument('--mode', action='store',dest='portMode',choices=['common', 'range', 'all'], required=False, default='common',help='common is 1-1024, range you specify --startport and --endport and all is 1-65535')
     parser.add_argument('--start-port', type=int, action='store', dest='start', required=False, default=1,help='start port of range')
     parser.add_argument('--end-port', type=int, action='store', dest='end', required=False, default=1024,help='end port of range')
     parser.add_argument('-t', '--threads', type=int, action='store', dest='threads', required=False, default=1,help='number of threads')
@@ -152,11 +153,40 @@ def busyBeeIFOneHost(hosts,delay, ports, groupedResults, index):
         time.sleep(delay)
     groupedResults[index] = local
 
-# start of the post processing function, takes in the results and deals with it
+# start of the post-processing function, takes in the results and deals with it
 def outPut(time,ifOnlyOpen,ifOutFile,groupedResults):
     fileName = "connectScan_"+str(time)+".txt"
 
 
+
+
+def getPorts(portMode, numberOfHosts, start, end, threads):
+    '''
+    :param portMode: common, range, all
+    :param numberOfHosts: number of hosts to scan
+    :param start: start port
+    :param end: end port
+    :param threads: number of threads
+    :return: list of ports to scan or lists of ports to scan
+    '''
+    listOfPorts = []
+    if portMode == "common":
+        listOfPorts = common_ports_dict.keys()
+    elif portMode == "all":
+        listOfPorts = list(range(1,65536))
+    elif portMode == "range":
+        listOfPorts = list(range(start, end+1))
+    else:
+        raise sys.exit("Invalid portMode")
+
+    if numberOfHosts == 1:
+        temp = [] * threads
+        for i in range(len(listOfPorts)):
+            temp[i % threads].append(listOfPorts[i])
+        return temp
+
+    else:
+        return listOfPorts
 
 #UnFinishedFUNC
 def main():
@@ -173,6 +203,32 @@ def main():
 
     try: int(args.end_port)
     except ValueError: sys.exit('wrong value for endport: needs to be int')
+
+
+
+    hosts = getIPaddresses(args.address)
+    ports = getPorts(args.portMode, len(hosts), args.start, args.end)
+    groupedResults = [] * args.threads
+    threads = []
+
+
+
+    for t in range (args.threads):
+        if len(hosts) == 1:
+            thread = threading.Thread(target=busyBeeIFOneHost,args=(hosts,args.delay, ports[t], groupedResults, t))
+            time.sleep(args.delay)
+            thread.start()
+
+        else:
+            thread = threading.Thread(target=busybeeIFMultipleHosts, args=(hosts, args.delay, ports, groupedResults, t))
+            threads.append(thread)
+
+
+    if args.threads != 1:
+        for t in threads:
+            t.start()
+
+
 
 
 
