@@ -2,7 +2,7 @@ import argparse
 import ipaddress
 import socket
 import queue
-
+import sys
 
 #list of common ports to check against
 common_ports = [
@@ -89,7 +89,7 @@ def getIPaddresses(address):
             hosts = [str(network) for ip in network]
             return hosts
         except:
-            print("Invalid Cidr range")
+            sys.exit('invalid CIDR notation')
     elif '-' in address:
         try:
             segments = address.split('.')
@@ -98,13 +98,13 @@ def getIPaddresses(address):
                 hosts.append(f"{segments[0]}.{segments[1]}.{segments[2]}.{i}")
             return hosts
         except:
-            print("Invalid host range")
+            sys.exit("Invalid host range")
     else:
         try:
             hosts.append(ipaddress.ip_address(address))
             return hosts
         except:
-            print("Invalid Host")
+            sys.exit("Invalid Host")
 #JL Edit V1
 def scan_port(target, port):
     """Simple port scanner -- checks if the port is actually open"""
@@ -126,3 +126,17 @@ def scan_port(target, port):
 #UnFinishedFUNC
 def main():
     args = parse_arguments()
+    try: float(args.delay)
+    except ValueError: sys.exit('wrong value for delay: needs to be float')
+
+    try: int(args.threads)
+    except ValueError: sys.exit('wrong value for threads: needs to be int')
+
+    try: int(args.start_port)
+    except ValueError: sys.exit('wrong value for startport: needs to be int')
+
+    try: int(args.end_port)
+    except ValueError: sys.exit('wrong value for endport: needs to be int')
+
+
+
