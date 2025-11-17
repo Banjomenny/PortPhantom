@@ -1,61 +1,60 @@
 import argparse
 import ipaddress
 import socket
-import queue
 import sys
+import time
 
 #list of common ports to check against
-common_ports = [
-    (20, "FTP Data"),
-    (21, "FTP Control"),
-    (22, "SSH"),
-    (23, "Telnet"),
-    (25, "SMTP"),
-    (53, "DNS"),
-    (67, "DHCP Server"),
-    (68, "DHCP Client"),
-    (69, "TFTP"),
-    (80, "HTTP"),
-    (110, "POP3"),
-    (119, "NNTP"),
-    (123, "NTP"),
-    (135, "Microsoft RPC"),
-    (137, "NetBIOS Name Service"),
-    (138, "NetBIOS Datagram Service"),
-    (139, "NetBIOS Session Service"),
-    (143, "IMAP"),
-    (161, "SNMP"),
-    (162, "SNMP Trap"),
-    (179, "BGP"),
-    (443, "HTTPS"),
-    (445, "Microsoft-DS (SMB)"),
-    (465, "SMTPS"),
-    (514, "Syslog"),
-    (587, "SMTP (Submission)"),
-    (631, "IPP"),
-    (993, "IMAPS"),
-    (995, "POP3S"),
-    (1080, "SOCKS Proxy"),
-    (1433, "Microsoft SQL Server"),
-    (1521, "Oracle DB"),
-    (1723, "PPTP"),
-    (3306, "MySQL"),
-    (3389, "RDP"),
-    (5432, "PostgreSQL"),
-    (5900, "VNC"),
-    (6379, "Redis"),
-    (6667, "IRC"),
-    (8000, "HTTP Alternate"),
-    (8080, "HTTP Proxy"),
-    (8443, "HTTPS Alternate"),
-    (8888, "Web Proxy"),
-    (9000, "SonarQube / PHP-FPM"),
-    (9090, "Prometheus / Web Admin"),
-    (9200, "Elasticsearch"),
-    (10000, "Webmin"),
-    (27017, "MongoDB"),
-]
-
+common_ports_dict = {
+    20: "FTP Data",
+    21: "FTP Control",
+    22: "SSH",
+    23: "Telnet",
+    25: "SMTP",
+    53: "DNS",
+    67: "DHCP Server",
+    68: "DHCP Client",
+    69: "TFTP",
+    80: "HTTP",
+    110: "POP3",
+    119: "NNTP",
+    123: "NTP",
+    135: "Microsoft RPC",
+    137: "NetBIOS Name Service",
+    138: "NetBIOS Datagram Service",
+    139: "NetBIOS Session Service",
+    143: "IMAP",
+    161: "SNMP",
+    162: "SNMP Trap",
+    179: "BGP",
+    443: "HTTPS",
+    445: "Microsoft-DS (SMB)",
+    465: "SMTPS",
+    514: "Syslog",
+    587: "SMTP (Submission)",
+    631: "IPP",
+    993: "IMAPS",
+    995: "POP3S",
+    1080: "SOCKS Proxy",
+    1433: "Microsoft SQL Server",
+    1521: "Oracle DB",
+    1723: "PPTP",
+    3306: "MySQL",
+    3389: "RDP",
+    5432: "PostgreSQL",
+    5900: "VNC",
+    6379: "Redis",
+    6667: "IRC",
+    8000: "HTTP Alternate",
+    8080: "HTTP Proxy",
+    8443: "HTTPS Alternate",
+    8888: "Web Proxy",
+    9000: "SonarQube / PHP-FPM",
+    9090: "Prometheus / Web Admin",
+    9200: "Elasticsearch",
+    10000: "Webmin",
+    27017: "MongoDB"
+}
 
 
 def parse_arguments():
@@ -107,6 +106,11 @@ def getIPaddresses(address):
             sys.exit("Invalid Host")
 #JL Edit V1
 def scan_port(target, port):
+    '''
+    :param target: target ip address
+    :param port: port to scan
+    :return: state of port
+    '''
     """Simple port scanner -- checks if the port is actually open"""
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -115,17 +119,49 @@ def scan_port(target, port):
         sock.close()
 
         if result == 0:
+
             return "OPEN"
         else:
             return "CLOSED"
     except:
         return "ERROR"
+# takes in the info and runs the scan then it outputs to a group of all the threads results for post processing
+def busybeeIFMultipleHosts(delay, ports, hosts, groupedResults, index):
+    # multiplies threads and delays to allow the user to have a precise delay so threads are staggered so the packet only gets sent so often
+    local = []
+    for host in hosts:
+        for port in ports:
+            if port in common_ports_dict:
+                # checks if port is one of the common ones
+                local.append([host,port,common_ports_dict[port]])
+            else:
+                local.append([host,port,'UNKNOWN'])
+            time.sleep(delay)
+    groupedResults[index] = local
+
+
+# only do one host. so only split ports and not hosts
+def busyBeeIFOneHost(hosts,delay, ports, groupedResults, index):
+    local = []
+    for port in ports:
+        if port in common_ports_dict:
+            # checks if port is one of the common ones
+            local.append([hosts[0], port, common_ports_dict[port]])
+        else:
+            local.append([hosts[0], port, 'UNKNOWN'])
+        time.sleep(delay)
+    groupedResults[index] = local
+
+# start of the post processing function, takes in the results and deals with it
+def outPut(time,ifOnlyOpen,ifOutFile,groupedResults):
+    fileName = "connectScan_"+str(time)+".txt"
 
 
 
 #UnFinishedFUNC
 def main():
     args = parse_arguments()
+    scanStart = time.time()
     try: float(args.delay)
     except ValueError: sys.exit('wrong value for delay: needs to be float')
 
