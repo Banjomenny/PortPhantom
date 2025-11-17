@@ -1,5 +1,6 @@
 import argparse
 import ipaddress
+import socket
 
 common_ports = [
     (20, "FTP Data"),
@@ -94,8 +95,24 @@ def getIpaddresses(address):
             return hosts
         except:
             print("Invalid Host")
+#JL Edit V1
+def scan_port(target, port):
+    """Simple port scanner -- checks if the port is actually open"""
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(1)
+        result = sock.connect_ex((target, port))
+        sock.close()
+
+        if result == 0:
+            return "OPEN"
+        else:
+            return "CLOSED"
+    except:
+        return "ERROR"
 
 
 
-    def main():
-        args = parse_arguments()
+#UnFinishedFUNC
+def main():
+    args = parse_arguments()
