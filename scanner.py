@@ -52,6 +52,8 @@ common_ports = [
     (27017, "MongoDB"),
 ]
 
+
+
 def parse_arguments():
     #allows for nice CLI argument parsing
     parser = argparse.ArgumentParser()
