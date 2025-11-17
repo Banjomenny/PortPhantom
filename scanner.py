@@ -1,6 +1,10 @@
 import argparse
 import ipaddress
+import socket
+import queue
 
+
+#list of common ports to check against
 common_ports = [
     (20, "FTP Data"),
     (21, "FTP Control"),
@@ -52,9 +56,36 @@ common_ports = [
     (27017, "MongoDB"),
 ]
 
+def isPortOpen(port,ip,sock):
+    '''
+    :param port: port to check
+    :param ip:  ip to check
+    :param sock: socket object
+    :return: if port is open, return True else False
+    '''
+
+    result = sock.connect_ex((ip, port))
+    if result == 0:
+        sock.close()
+        return True
+    else:
+        return False
+
+def busyBee(ports,hosts,delay,ifOutput):
+    '''
+    :param ports: list of ports to scan
+    :param hosts: list of hosts to scan
+    :param delay: delay between scanning
+    :param ifOutput: if output is to a file
+    :return: dictionary of if the port is open or not
+    '''
+
 
 
 def parse_arguments():
+    '''
+    :return: arguments
+    '''
     #allows for nice CLI argument parsing
     parser = argparse.ArgumentParser()
     parser.add_argument("-a", "--address", action='store', dest='address', required=True,help="you can use CIDR notation or a something like 1.1.1.1-100. or specify single host")
@@ -69,7 +100,11 @@ def parse_arguments():
     parser.add_argument('--show-vulns', action='store_true', dest='show_vulns', required=False, default=False,help='show vulnerabilities')
     return parser.parse_args()
 
-def getIpaddresses(address):
+def getIPaddresses(address):
+    '''
+    :param address: the entered ip address from user
+    :return: list of hosts to scan
+    '''
     #allows for a range or cidr notation of ip addresses
     hosts = []
     if '\\' in address:
@@ -98,4 +133,5 @@ def getIpaddresses(address):
 
 
     def main():
+
         args = parse_arguments()
