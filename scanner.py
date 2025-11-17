@@ -76,7 +76,7 @@ def parse_arguments():
     parser.add_argument('--show-vulns', action='store_true', dest='show_vulns', required=False, default=False,help='show vulnerabilities')
     return parser.parse_args()
 
-def getIPaddresses(address):
+def getIPaddresses(address, threads):
     '''
     :param address: the entered ip address from user
     :return: list of hosts to scan
@@ -87,7 +87,10 @@ def getIPaddresses(address):
         try:
             network = ipaddress.ip_network(address).hosts()
             hosts = [str(network) for ip in network]
-            return hosts
+            temp = temp = [[] for i in range(threads)]
+            for i in range(len(hosts)):
+                temp[i % threads].append(hosts[i])
+            return temp
         except:
             sys.exit('invalid CIDR notation')
     elif '-' in address:
@@ -96,7 +99,10 @@ def getIPaddresses(address):
             hostRange = address.split('-')
             for i in range(int(hostRange[1]), int(hostRange[0]) + 1 ):
                 hosts.append(f"{segments[0]}.{segments[1]}.{segments[2]}.{i}")
-            return hosts
+            temp = [] * threads
+            for i in range(len(hosts)):
+                temp[i % threads].append(hosts[i])
+            return temp
         except:
             sys.exit("Invalid host range")
     else:
@@ -128,27 +134,46 @@ def scan_port(target, port):
         return "ERROR"
 # takes in the info and runs the scan then it outputs to a group of all the threads results for post processing
 def busybeeIFMultipleHosts(delay, ports, hosts, groupedResults, index):
+    '''
+    :param delay: delay between scans
+    :param ports: ports to scan
+    :param hosts: hosts to scan
+    :param groupedResults: the final results of all threads
+    :param index: id of thread
+    '''
     # multiplies threads and delays to allow the user to have a precise delay so threads are staggered so the packet only gets sent so often
     local = []
     for host in hosts:
         for port in ports:
             if port in common_ports_dict:
                 # checks if port is one of the common ones
-                local.append([host,port,common_ports_dict[port]])
+                state = scan_port(host, port)
+                local.append([host,port,common_ports_dict[port],state])
+
             else:
-                local.append([host,port,'UNKNOWN'])
+                state = scan_port(host, port)
+                local.append([host,port,'UNKNOWN',state])
             time.sleep(delay)
     groupedResults[index] = local
 
 
 # only do one host. so only split ports and not hosts
 def busyBeeIFOneHost(hosts,delay, ports, groupedResults, index):
+    '''
+    :param hosts: list of hosts to scan
+    :param delay: delay between scanning
+    :param ports: list of ports
+    :param groupedResults: grouped results
+    :param index: id of thread
+    '''
     local = []
     for port in ports:
         if port in common_ports_dict:
             # checks if port is one of the common ones
-            local.append([hosts[0], port, common_ports_dict[port]])
+            state = scan_port(hosts[0], port)
+            local.append([hosts[0], port, common_ports_dict[port],state])
         else:
+            state = scan_port(hosts[0], port)
             local.append([hosts[0], port, 'UNKNOWN'])
         time.sleep(delay)
     groupedResults[index] = local
@@ -180,7 +205,7 @@ def getPorts(portMode, numberOfHosts, start, end, threads):
         raise sys.exit("Invalid portMode")
 
     if numberOfHosts == 1:
-        temp = [] * threads
+        temp = [[] for i in range(threads)]
         for i in range(len(listOfPorts)):
             temp[i % threads].append(listOfPorts[i])
         return temp
@@ -206,13 +231,13 @@ def main():
 
 
 
-    hosts = getIPaddresses(args.address)
-    ports = getPorts(args.portMode, len(hosts), args.start, args.end)
-    groupedResults = [] * args.threads
+    hosts = getIPaddresses(args.address, args.threads)
+    ports = getPorts(args.portMode, len(hosts), args.start, args.end, args.threads)
+    groupedResults = [[] for i in range(args.threads)]
     threads = []
 
 
-
+    #create worker threads to then scan all ports. if 1 host is present splits up ports and if multiple hosts then splits up hosts
     for t in range (args.threads):
         if len(hosts) == 1:
             thread = threading.Thread(target=busyBeeIFOneHost,args=(hosts,args.delay, ports[t], groupedResults, t))
@@ -220,13 +245,21 @@ def main():
             thread.start()
 
         else:
-            thread = threading.Thread(target=busybeeIFMultipleHosts, args=(hosts, args.delay, ports, groupedResults, t))
+            thread = threading.Thread(target=busybeeIFMultipleHosts, args=(hosts[t], args.delay, ports, groupedResults, t))
             threads.append(thread)
+            thread.join()
 
 
     if args.threads != 1:
         for t in threads:
+            t.join()
             t.start()
+
+    for group in groupedResults:
+        for host, port, service, state in group:
+            if state == 'OPEN':
+                print(f"{host}:{port} ({service}) -> {state}")
+
 
 
 
