@@ -56,30 +56,6 @@ common_ports = [
     (27017, "MongoDB"),
 ]
 
-def isPortOpen(port,ip,sock):
-    '''
-    :param port: port to check
-    :param ip:  ip to check
-    :param sock: socket object
-    :return: if port is open, return True else False
-    '''
-
-    result = sock.connect_ex((ip, port))
-    if result == 0:
-        sock.close()
-        return True
-    else:
-        return False
-
-def busyBee(ports,hosts,delay,ifOutput):
-    '''
-    :param ports: list of ports to scan
-    :param hosts: list of hosts to scan
-    :param delay: delay between scanning
-    :param ifOutput: if output is to a file
-    :return: dictionary of if the port is open or not
-    '''
-
 
 
 def parse_arguments():
@@ -129,9 +105,24 @@ def getIPaddresses(address):
             return hosts
         except:
             print("Invalid Host")
+#JL Edit V1
+def scan_port(target, port):
+    """Simple port scanner -- checks if the port is actually open"""
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(1)
+        result = sock.connect_ex((target, port))
+        sock.close()
+
+        if result == 0:
+            return "OPEN"
+        else:
+            return "CLOSED"
+    except:
+        return "ERROR"
 
 
 
-    def main():
-
-        args = parse_arguments()
+#UnFinishedFUNC
+def main():
+    args = parse_arguments()
