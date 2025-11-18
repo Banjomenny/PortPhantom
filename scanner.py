@@ -69,17 +69,22 @@ class Color(Enum):
     WHITE = 7
 
 def stringInColor(color,text ):
+    '''
+    :param color:  Color enum class value of the color you want
+    :param text: the selected text you wanna make colorful
+    :return: the string that makes the text colorful
+    '''
     os.system("color")
     RESET = '\033[0m'
     COLORS = {
-     0: "\e[0;30m",
-     1: "\e[0;31m",
-     2: "\e[0;32m",
-     3: "\e[0;33m",
-     4: "\e[0;34m",
-     5: "\e[0;35m",
-     6: "\e[0;36m",
-     7: "\e[0;37m"
+     0: "\033[0;30m",
+     1: "\033[0;31m",
+     2: "\033[0;32m",
+     3: "\033[0;33m",
+     4: "\033[0;34m",
+     5: "\033[0;35m",
+     6: "\033[0;36m",
+     7: "\0333[0;37m"
     }
     return COLORS[color.value] + text + RESET
 
@@ -288,6 +293,7 @@ def main():
     for group in groupedResults:
         for host, port, service, state in group:
             if state == 'OPEN':
+                state = stringInColor(Color.GREEN, state)
                 print(f"{host}:{port} ({service}) -> {state}")
 
 
