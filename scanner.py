@@ -4,6 +4,8 @@ import socket
 import sys
 import threading
 import time
+import os
+from enum import Enum
 
 #list of common ports to check against
 common_ports_dict = {
@@ -56,7 +58,30 @@ common_ports_dict = {
     10000: "Webmin",
     27017: "MongoDB"
 }
+class Color(Enum):
+    BLACK = 0
+    RED = 1
+    GREEN = 2
+    YELLOW = 3
+    BLUE = 4
+    PURPLE = 5
+    CYAN = 6
+    WHITE = 7
 
+def stringInColor(color,text ):
+    os.system("color")
+    RESET = '\033[0m'
+    COLORS = {
+     0: "\e[0;30m",
+     1: "\e[0;31m",
+     2: "\e[0;32m",
+     3: "\e[0;33m",
+     4: "\e[0;34m",
+     5: "\e[0;35m",
+     6: "\e[0;36m",
+     7: "\e[0;37m"
+    }
+    return COLORS[color.value] + text + RESET
 
 def parse_arguments():
     '''
