@@ -111,46 +111,7 @@ def checkHostStatus(hostname):
         case _:
             return 1
     return response
-def serviceDetect(banner):
-    service = 'UNKNOWN'
-    match True:
-        case _ if "apache" in banner:
-            service = "Apache HTTPD"
-        case _ if "nginx" in banner:
-            service = "Nginx"
-        case _ if "iis" in banner:
-            service = "Microsoft IIS"
-        case _ if "openssh" in banner:
-            service = "OpenSSH"
-        case _ if "ssh" in banner:
-            service = "SSH"
-        case _ if "postfix" in banner:
-            service = "Postfix SMTP"
-        case _ if "exim" in banner:
-            service = "Exim SMTP"
-        case _ if "sendmail" in banner:
-            service = "Sendmail SMTP"
-        case _ if "dovecot" in banner:
-            service = "Dovecot IMAP/POP3"
-        case _ if "mysql" in banner or "mariadb" in banner:
-            service = "MySQL/MariaDB"
-        case _ if "postgres" in banner:
-            service = "PostgreSQL"
-        case _ if "mongodb" in banner:
-            service = "MongoDB"
-        case _ if "redis" in banner:
-            service = "Redis"
-        case _ if "ftp" in banner:
-            service = "FTP"
-        case _ if "telnet" in banner:
-            service = "Telnet"
-        case _ if "vnc" in banner:
-            service = "VNC"
-        case _ if "irc" in banner:
-            service = "IRC"
-        case _:
-            pass
-    return service
+
 
 def parse_arguments():
     '''
@@ -165,7 +126,8 @@ def parse_arguments():
     parser.add_argument('-t', '--threads', type=int, action='store', dest='threads', required=False, default=1,help='number of threads')
     parser.add_argument('-d', '--delay', type=float, action='store', dest='delay', required=False, default=0.1,help='delay in seconds')
     parser.add_argument('--display-only-open', action='store_true', dest='display_only_open', required=False, default=False, help='display only open port')
-    parser.add_argument('--output-to-file', action='store_true', dest='output_to_file', required=False, default=False,help='output to file')
+    parser.add_argument('--output-to-file', type=str, dest='output_file', required=False, default=None, help='output filename (e.g., results.txt or results.csv)') #JL output
+    parser.add_argument('--output-format', choices=['txt', 'csv'], default='txt', help='output format: txt or csv') #JL output
     parser.add_argument('--servicescan', action='store_true', dest='servicescan', required=False, default=False, help='service scan')
     parser.add_argument('--show-vulns', action='store_true', dest='show_vulns', required=False, default=False,help='show vulnerabilities')
     parser.add_argument('--do-pings', action='store_true', dest='do_pings', required=False, default=False,help='ping service')
@@ -265,14 +227,13 @@ def scan_port(target, port, ifServiceScan):
                         print(f"DEBUG HEADERS:\n{banner}")
                     except Exception:
                         banner = "NO BANNER"
-
+        service = 'UNKNOWN'
         banner = banner.strip()
-        service = service = serviceDetect(banner)
 
-        if service == 'UNKNOWN':
-            if port in common_ports_dict.keys():
-                service = common_ports_dict[port]
-
+        try:
+            service = common_ports_dict[port]
+        except:
+            service = 'UNKNOWN'
 
         if ifServiceScan:
             return {
@@ -340,12 +301,83 @@ def busyBeeIFOneHost(hosts, ports, delay, groupedResults, index, ifServiceScan):
         local.append(scan_port(target, port, ifServiceScan))
     groupedResults[index] = local
 
-# start of the post-processing function, takes in the results and deals with it
-def outputFile(time,ifOnlyOpen,ifOutFile,finalOutput):
-    fileName = "connectScan_"+str(time)+".txt"
+def save_as_csv(fileName, finalOutput, args):
+    """Save results in CSV format"""
+    import csv
+    
+    with open(fileName, 'w', newline='') as f:
+        if args.servicescan:
+            writer = csv.writer(f)
+            writer.writerow(['Host', 'Port', 'Service', 'State', 'Banner'])
+            
+            for host in finalOutput.keys():
+                for result in finalOutput[host]:
+                    port, service, state, banner = result
+                    if not args.display_only_open or state == 'OPEN':
+                        banner_text = banner if banner and banner != "NO BANNER" else ""
+                        writer.writerow([host, port, service, state, banner_text])
+        else:
+            writer = csv.writer(f)
+            writer.writerow(['Host', 'Port', 'Service', 'State'])
+            
+            for host in finalOutput.keys():
+                for result in finalOutput[host]:
+                    port, service, state = result
+                    if not args.display_only_open or state == 'OPEN':
+                        writer.writerow([host, port, service, state])
 
+def save_as_txt(fileName, finalOutput, args):
+    """Save results in TXT format"""
+    with open(fileName, 'w') as f:
+        f.write("="*70 + "\n")
+        f.write(f"PORT SCAN REPORT\n")
+        f.write(f"Timestamp: {time.ctime()}\n")
+        f.write(f"Target(s): {args.address}\n")
+        f.write(f"Port Mode: {args.portMode}\n")
+        f.write(f"Threads: {args.threads}\n")
+        f.write("="*70 + "\n\n")
+        
+        for host in finalOutput.keys():
+            f.write(f"\n{'='*70}\n")
+            f.write(f"Host: {host}\n")
+            f.write(f"{'-'*70}\n")
+            f.write(f"{'Port':<10} {'Service':<25} {'State':<10}\n")
+            f.write(f"{'-'*70}\n")
+            
+            for result in finalOutput[host]:
+                if args.servicescan:
+                    port, service, state, banner = result
+                    if not args.display_only_open or state == 'OPEN':
+                        f.write(f"{port:<10} {service:<25} {state:<10}")
+                        if banner and banner != "NO BANNER":
+                            f.write(f" | {banner[:50]}")
+                        f.write("\n")
+                else:
+                    port, service, state = result
+                    if not args.display_only_open or state == 'OPEN':
+                        f.write(f"{port:<10} {service:<25} {state:<10}\n")
+        
+        f.write("\n" + "="*70 + "\n")
+        f.write("END OF REPORT\n")
 
-
+# start of the post-processing function, takes in the results and deals with it #JL OUTPUT
+def outputFile(timestamp, finalOutput, args):
+    """Save scan results to file in txt or csv format"""
+    
+    # Determine filename
+    if args.output_file:
+        fileName = args.output_file
+    else:
+        extension = 'csv' if args.output_format == 'csv' else 'txt'
+        fileName = f"connectScan_{int(timestamp)}.{extension}"
+    
+    # Save based on format
+    if args.output_format == 'csv':
+        save_as_csv(fileName, finalOutput, args)
+    else:
+        save_as_txt(fileName, finalOutput, args)
+    
+    print(f"\n[+] Results saved to: {fileName}")
 
 def getPorts(portMode, numberOfHosts, start, end, threads):
     '''
@@ -506,7 +538,9 @@ def main():
                             state = stringInColor(Color.RED, state)
                             print(f"{port:<5} : {service:<25} | {state:<10} {str(banner):<20}")
                     seen.add(port)
+    
+    if args.output_file or args.output_format != 'txt':
+        outputFile(scanStart, final, args)
 
 main()
-
 
