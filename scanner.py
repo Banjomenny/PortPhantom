@@ -98,6 +98,47 @@ def stringInColor(color, text):
     return COLORS[color.value] + text + RESET
 
 
+def serviceDetect(banner):
+    service = 'UNKNOWN'
+    match True:
+        case _ if "apache" in banner:
+            service = "Apache HTTPD"
+        case _ if "nginx" in banner:
+            service = "Nginx"
+        case _ if "iis" in banner:
+            service = "Microsoft IIS"
+        case _ if "openssh" in banner:
+            service = "OpenSSH"
+        case _ if "ssh" in banner:
+            service = "SSH"
+        case _ if "postfix" in banner:
+            service = "Postfix SMTP"
+        case _ if "exim" in banner:
+            service = "Exim SMTP"
+        case _ if "sendmail" in banner:
+            service = "Sendmail SMTP"
+        case _ if "dovecot" in banner:
+            service = "Dovecot IMAP/POP3"
+        case _ if "mysql" in banner or "mariadb" in banner:
+            service = "MySQL/MariaDB"
+        case _ if "postgres" in banner:
+            service = "PostgreSQL"
+        case _ if "mongodb" in banner:
+            service = "MongoDB"
+        case _ if "redis" in banner:
+            service = "Redis"
+        case _ if "ftp" in banner:
+            service = "FTP"
+        case _ if "telnet" in banner:
+            service = "Telnet"
+        case _ if "vnc" in banner:
+            service = "VNC"
+        case _ if "irc" in banner:
+            service = "IRC"
+        case _:
+            pass
+    return service
+
 def checkHostStatus(hostname):
     platform = os.name
     response = ""
@@ -242,13 +283,13 @@ def scan_port(target, port, ifServiceScan):
                     print(f"DEBUG HEADERS:\n{banner}")
                 except Exception:
                     banner = "NO BANNER"
-        service = 'UNKNOWN'
-        banner = banner.strip()
 
-        try:
-            service = common_ports_dict[port]
-        except:
-            service = 'UNKNOWN'
+        banner = banner.strip()
+        service = service = serviceDetect(banner)
+
+        if service == 'UNKNOWN':
+            if port in common_ports_dict.keys():
+                service = common_ports_dict[port]
 
         if ifServiceScan:
             return {
