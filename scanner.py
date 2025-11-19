@@ -5,7 +5,6 @@ import sys
 import threading
 import time
 import os
-from asyncio import threads
 from enum import Enum
 
 
@@ -100,10 +99,10 @@ def checkHostStatus(hostname):
     response = ""
     match platform:
         case 'posix':
-            ping_command = f"ping -c 1 {hostname}"
+            ping_command = f"ping -c 1 {hostname[0]}"
             response = os.system(f"{ping_command} > /dev/null 2>&1")
         case 'nt':
-            ping_command = f"ping -n 1 {hostname}"
+            ping_command = f"ping -n 1 {hostname[0]}"
             response = os.system(f"{ping_command} > NUL")
         case _:
             return 1
@@ -117,7 +116,7 @@ def parse_arguments():
     #allows for nice CLI argument parsing
     parser = argparse.ArgumentParser(description='network scanner',usage='scans a given network for open ports')
     parser.add_argument("-a", "--address", action='store', dest='address', required=True,help="you can use CIDR notation or a something like 1.1.1.1-100. or specify single host")
-    parser.add_argument('--mode', action='store',dest='portMode',choices=['common', 'range', 'all'], required=False, default='common',help='common is 1-1024, range you specify --startport and --endport and all is 1-65535')
+    parser.add_argument('--mode', action='store',dest='portMode',choices=['common', 'range', 'all', 'single'], required=False, default='common',help='common is 1-1024, range you specify --startport and --endport and all is 1-65535')
     parser.add_argument('--start-port', type=int, action='store', dest='start', required=False, default=1,help='start port of range')
     parser.add_argument('--end-port', type=int, action='store', dest='end', required=False, default=1024,help='end port of range')
     parser.add_argument('-t', '--threads', type=int, action='store', dest='threads', required=False, default=1,help='number of threads')
@@ -126,6 +125,7 @@ def parse_arguments():
     parser.add_argument('--output-to-file', action='store_true', dest='output_to_file', required=False, default=False,help='output to file')
     parser.add_argument('--servicescan', action='store_true', dest='servicescan', required=False, default=False, help='service scan')
     parser.add_argument('--show-vulns', action='store_true', dest='show_vulns', required=False, default=False,help='show vulnerabilities')
+    parser.add_argument('--do-pings', action='store_true', dest='do_pings', required=False, default=False,help='ping service')
     return parser.parse_args()
 
 def getIPaddresses(address, threads):
@@ -154,10 +154,8 @@ def getIPaddresses(address, threads):
             hostRange = segments[3].split('-')
             print(hostRange)
             for i in range(int(hostRange[0]), int(hostRange[1]) + 1 ):
-               print(i)
                if i > 255:
                    sys.exit("invalid Octet")
-               print(i)
                hosts.append(f"{segments[0]}.{segments[1]}.{segments[2]}.{i}")
 
             temp = [[] for i in range(threads)]
@@ -208,22 +206,21 @@ def busybeeIFMultipleHosts(hosts, ports, delay, groupedResults, index):
     # multiplies threads and delays to allow the user to have a precise delay so threads are staggered so the packet only gets sent so often
     local = []
     for host in hosts:
-        if checkHostStatus(host) == 0:
-            for port in ports:
-                if port in common_ports_dict:
-                    # checks if port is one of the common ones
-                    state = scan_port(host, port)
-                    local.append([host,port,common_ports_dict[port],state])
+        for port in ports:
+            if port in common_ports_dict:
+                # checks if port is one of the common ones
+                state = scan_port(host, port)
+                local.append([host,port,common_ports_dict[port],state])
 
-                else:
-                    state = scan_port(host, port)
-                    local.append([host,port,'UNKNOWN',state])
-                time.sleep(delay)
-        groupedResults[index] = local
+            else:
+                state = scan_port(host, port)
+                local.append([host,port,'UNKNOWN',state])
+            time.sleep(delay)
+    groupedResults[index] = local
 
 
 # only do one host. so only split ports and not hosts
-def busyBeeIFOneHost(hosts, ports, delay, groupedResults, index):
+def busyBeeIFOneHost(hosts, ports, delay, groupedResults, index, ifPing):
     '''
     :param hosts: list of hosts to scan
     :param delay: delay between scanning
@@ -232,21 +229,18 @@ def busyBeeIFOneHost(hosts, ports, delay, groupedResults, index):
     :param index: id of thread
     '''
     local = []
-    if checkHostStatus(hosts[0]) == 0:
-        for port in ports:
-            if port in common_ports_dict:
-                # checks if port is one of the common ones
-                state = scan_port(hosts[0], port)
-                local.append([hosts[0], port, common_ports_dict[port],state])
-            else:
-                state = scan_port(hosts[0], port)
-                local.append([hosts[0], port, 'UNKNOWN',  state],)
-            time.sleep(delay)
-        groupedResults[index] = local
-    else:
-        sys.exit('host is down')
+    for port in ports:
+        if port in common_ports_dict:
+            # checks if port is one of the common ones
+            state = scan_port(hosts[0], port)
+            local.append([hosts[0], port, common_ports_dict[port],state])
+        else:
+            state = scan_port(hosts[0], port)
+            local.append([hosts[0], port, 'UNKNOWN',  state],)
+        time.sleep(delay)
+    groupedResults[index] = local
 # start of the post-processing function, takes in the results and deals with it
-def outPut(time,ifOnlyOpen,ifOutFile,groupedResults):
+def outputFile(time,ifOnlyOpen,ifOutFile,finalOutput):
     fileName = "connectScan_"+str(time)+".txt"
 
 
@@ -307,11 +301,21 @@ def main():
 
 
 
-    hosts = getIPaddresses(args.address, args.threads)
+    prehosts = getIPaddresses(args.address, args.threads)
+    hosts = []
+    if args.do_pings:
+        for i in range(len(prehosts)):
+            if not prehosts[i] == []:
+                results = checkHostStatus(prehosts[i])
+                if results == 0:
+                    hosts.append(prehosts[i])
+    else: hosts = prehosts
     ports = getPorts(args.portMode, len(hosts), args.start, args.end, args.threads)
     groupedResults = [[] for i in range(args.threads)]
     threads = []
 
+    if len(hosts) < args.threads:
+        args.threads = len(hosts)
 
     #create worker threads to then scan all ports. if 1 host is present splits up ports and if multiple hosts then splits up hosts
     for t in range (args.threads):
@@ -331,12 +335,13 @@ def main():
             t.start()
         for t in threads:
             t.join()
+
     target = stringInColor(Color.BOLDWHITE, "target")
     service = stringInColor(Color.BOLDWHITE, "service")
     state = stringInColor(Color.BOLDWHITE, "state")
     print(f"    {target:<15}  {service:>25}{state:>35}")
     for group in groupedResults:
-
+    
         for host, port, service, state in group:
             if state == 'OPEN':
                 state = stringInColor(Color.GREEN, state)
@@ -350,7 +355,7 @@ def main():
     for group in groupedResults:
         for host, port, service, state in group:
             scannedHosts.add(host)
-
+    print(output(scannedHosts, groupedResults))
 
 main()
 
