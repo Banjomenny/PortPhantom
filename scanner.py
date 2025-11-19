@@ -99,10 +99,10 @@ def checkHostStatus(hostname):
     response = ""
     match platform:
         case 'posix':
-            ping_command = f"ping -c 1 {hostname[0]}"
+            ping_command = f"ping -c 1 {hostname}"
             response = os.system(f"{ping_command} > /dev/null 2>&1")
         case 'nt':
-            ping_command = f"ping -n 1 {hostname[0]}"
+            ping_command = f"ping -n 1 {hostname}"
             response = os.system(f"{ping_command} > NUL")
         case _:
             return 1
@@ -137,38 +137,28 @@ def getIPaddresses(address, threads):
     hosts = []
     if '/' in address:
         try:
-            print(address)
             network = ipaddress.ip_network(address).hosts()
-            print(network)
             hosts = [str(ip) for ip in network]
-            temp = [[] for i in range(threads)]
-            for i in range(len(hosts)):
-                temp[i % threads].append(hosts[i])
-            return temp
+            return hosts
         except:
             sys.exit('invalid CIDR notation')
     elif '-' in address:
         try:
             segments = address.split('.')
-            print(segments)
             hostRange = segments[3].split('-')
-            print(hostRange)
             for i in range(int(hostRange[0]), int(hostRange[1]) + 1 ):
                if i > 255:
                    sys.exit("invalid Octet")
                hosts.append(f"{segments[0]}.{segments[1]}.{segments[2]}.{i}")
+            return hosts
 
-            temp = [[] for i in range(threads)]
-            for i in range(len(hosts)):
-                temp[i % threads].append(hosts[i])
-            return temp
         except Exception as e:
             print(e)
             sys.exit("Invalid host range")
     else:
         try:
-            hosts.append(str(ipaddress.ip_address(address)))
-            return hosts
+            hosts = str(ipaddress.ip_address(address))
+            return [hosts]
         except:
             sys.exit("Invalid Host")
 #JL Edit V1
@@ -220,25 +210,28 @@ def busybeeIFMultipleHosts(hosts, ports, delay, groupedResults, index):
 
 
 # only do one host. so only split ports and not hosts
-def busyBeeIFOneHost(hosts, ports, delay, groupedResults, index, ifPing):
+def busyBeeIFOneHost(hosts, ports, delay, groupedResults, index):
     '''
-    :param hosts: list of hosts to scan
-    :param delay: delay between scanning
-    :param ports: list of ports
-    :param groupedResults: grouped results
-    :param index: id of thread
+    :param hosts:
+    :param ports:
+    :param delay:
+    :param groupedResults:
+    :param index:
+    :return:
     '''
+
     local = []
+    target = hosts[0]
     for port in ports:
         if port in common_ports_dict:
-            # checks if port is one of the common ones
-            state = scan_port(hosts[0], port)
-            local.append([hosts[0], port, common_ports_dict[port],state])
+            state = scan_port(target, port)
+            local.append([target, port, common_ports_dict[port], state])
         else:
-            state = scan_port(hosts[0], port)
-            local.append([hosts[0], port, 'UNKNOWN',  state],)
+            state = scan_port(target, port)
+            local.append([target, port, 'UNKNOWN', state])
         time.sleep(delay)
     groupedResults[index] = local
+
 # start of the post-processing function, takes in the results and deals with it
 def outputFile(time,ifOnlyOpen,ifOutFile,finalOutput):
     fileName = "connectScan_"+str(time)+".txt"
@@ -277,10 +270,12 @@ def getPorts(portMode, numberOfHosts, start, end, threads):
 def output(hosts, results):
     finalOutput = {host: [] for host in hosts}
     for host in hosts:
+        seen = set()
         for group in results:
             for ip, port, service, state in group:
-                if ip in finalOutput:
+                if ip == host and port not in seen:
                     finalOutput[ip].append([port,service,state])
+                    seen.add(port)
     return finalOutput
 
 #UnFinishedFUNC
@@ -302,60 +297,83 @@ def main():
 
 
     prehosts = getIPaddresses(args.address, args.threads)
-    hosts = []
+    flatHosts = []
+
+    for host in prehosts:
+        if isinstance(host, list):
+            flatHosts.extend(host)
+        else:
+            flatHosts.append(host)
+
     if args.do_pings:
-        for i in range(len(prehosts)):
-            if not prehosts[i] == []:
-                results = checkHostStatus(prehosts[i])
-                if results == 0:
-                    hosts.append(prehosts[i])
-    else: hosts = prehosts
+        hosts = []
+        for host in flatHosts:
+            if checkHostStatus(host) == 0:
+                hosts.append(host)
+    else:
+        hosts = flatHosts
+    print(hosts)
+
     ports = getPorts(args.portMode, len(hosts), args.start, args.end, args.threads)
     groupedResults = [[] for i in range(args.threads)]
     threads = []
+    if(len(hosts) > 1):
+        if len(hosts) < args.threads:
+            args.threads = len(hosts)
+    print(hosts)
 
-    if len(hosts) < args.threads:
-        args.threads = len(hosts)
+    hostChunks = []
+    if len(hosts) > 1:
+
+        hostChunks = [[] for i in range(args.threads)]
+        for i in range(len(hosts)):
+            hostChunks[i % args.threads].append(hosts[i])
 
     #create worker threads to then scan all ports. if 1 host is present splits up ports and if multiple hosts then splits up hosts
     for t in range (args.threads):
         if len(hosts) == 1:
             thread = threading.Thread(target=busyBeeIFOneHost,args=(hosts, ports[t],args.delay, groupedResults, t))
-            time.sleep(args.delay)
             threads.append(thread)
 
         else:
-            thread = threading.Thread(target=busybeeIFMultipleHosts, args=(hosts[t], ports, args.delay, groupedResults, t))
+
+
+
+            thread = threading.Thread(target=busybeeIFMultipleHosts, args=(hostChunks[t], ports, args.delay, groupedResults, t))
             threads.append(thread)
 
 
+    for t in threads:
+         t.start()
+    for t in threads:
+        t.join()
 
-    if args.threads != 1:
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-
-    target = stringInColor(Color.BOLDWHITE, "target")
-    service = stringInColor(Color.BOLDWHITE, "service")
-    state = stringInColor(Color.BOLDWHITE, "state")
-    print(f"    {target:<15}  {service:>25}{state:>35}")
-    for group in groupedResults:
-    
-        for host, port, service, state in group:
-            if state == 'OPEN':
-                state = stringInColor(Color.GREEN, state)
-                print(f"{host}:{port:<5} : {service:<25} | {state:>10}")
-            else:
-                if not args.display_only_open:
-                    state = stringInColor(Color.RED, state)
-                    print(f"{host}:{port:<5} : {service:<25} | {state:<10}")
+    scanEnd = time.time()
+    elapsedTime = scanEnd - scanStart
+    print("Elapsed time: " + str(elapsedTime))
 
     scannedHosts = set()
     for group in groupedResults:
         for host, port, service, state in group:
             scannedHosts.add(host)
-    print(output(scannedHosts, groupedResults))
+
+    final = output(scannedHosts, groupedResults)
+
+    target = stringInColor(Color.BOLDWHITE, 'port')
+    serviceName = stringInColor(Color.BOLDWHITE, "service")
+    stateName = stringInColor(Color.BOLDWHITE, "state")
+    for host in final.keys():
+        print("\nHost: " + stringInColor(Color.PURPLE,host))
+        print(f"{target:>15}  {serviceName:>25}{stateName:>30}")
+        for port, service, state in final[host]:
+            if state == 'OPEN':
+                state = stringInColor(Color.GREEN, state)
+                print(f"{port:<5} : {service:<25} | {state:>10}")
+            else:
+                if not args.display_only_open:
+                    state = stringInColor(Color.RED, state)
+                    print(f"{port:<5} : {service:<25} | {state:<10}")
+
 
 main()
 
