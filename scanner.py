@@ -5,6 +5,7 @@ import sys
 import threading
 import time
 import os
+from asyncio import threads
 from enum import Enum
 
 
@@ -149,16 +150,22 @@ def getIPaddresses(address, threads):
     elif '-' in address:
         try:
             segments = address.split('.')
-            hostRange = address.split('-')
+            print(segments)
+            hostRange = segments[3].split('-')
+            print(hostRange)
             for i in range(int(hostRange[0]), int(hostRange[1]) + 1 ):
-               if i < 255:
+               print(i)
+               if i > 255:
                    sys.exit("invalid Octet")
+               print(i)
                hosts.append(f"{segments[0]}.{segments[1]}.{segments[2]}.{i}")
+
             temp = [[] for i in range(threads)]
             for i in range(len(hosts)):
                 temp[i % threads].append(hosts[i])
             return temp
-        except:
+        except Exception as e:
+            print(e)
             sys.exit("Invalid host range")
     else:
         try:
@@ -273,6 +280,15 @@ def getPorts(portMode, numberOfHosts, start, end, threads):
     else:
         return listOfPorts
 
+def output(hosts, results):
+    finalOutput = {host: [] for host in hosts}
+    for host in hosts:
+        for group in results:
+            for ip, port, service, state in group:
+                if ip in finalOutput:
+                    finalOutput[ip].append([port,service,state])
+    return finalOutput
+
 #UnFinishedFUNC
 def main():
     args = parse_arguments()
@@ -329,6 +345,11 @@ def main():
                 if not args.display_only_open:
                     state = stringInColor(Color.RED, state)
                     print(f"{host}:{port:<5} : {service:<25} | {state:<10}")
+
+    scannedHosts = set()
+    for group in groupedResults:
+        for host, port, service, state in group:
+            scannedHosts.add(host)
 
 
 main()
