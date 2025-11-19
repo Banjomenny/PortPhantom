@@ -265,13 +265,14 @@ def scan_port(target, port, ifServiceScan):
                         print(f"DEBUG HEADERS:\n{banner}")
                     except Exception:
                         banner = "NO BANNER"
-        service = 'UNKNOWN'
-        banner = banner.strip()
 
-        if port in common_ports_dict.keys():
-            service = common_ports_dict[port]
-        else:
-            service = serviceDetect(banner)
+        banner = banner.strip()
+        service = service = serviceDetect(banner)
+
+        if service == 'UNKNOWN':
+            if port in common_ports_dict.keys():
+                service = common_ports_dict[port]
+
 
         if ifServiceScan:
             return {
