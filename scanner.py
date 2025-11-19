@@ -59,6 +59,10 @@ common_ports_dict = {
     10000: "Webmin",
     27017: "MongoDB"
 }
+
+
+
+
 class Color(Enum):
     BLACK = 0
     RED = 1
@@ -135,6 +139,10 @@ def getIPaddresses(address, threads):
     '''
     #allows for a range or cidr notation of ip addresses
     hosts = []
+    address = address.strip()
+
+    print(f"DEBUG: raw address string = {repr(address)}")
+
     if '/' in address:
         try:
             network = ipaddress.ip_network(address).hosts()
@@ -157,12 +165,14 @@ def getIPaddresses(address, threads):
             sys.exit("Invalid host range")
     else:
         try:
-            hosts = str(ipaddress.ip_address(address))
-            return [hosts]
+            hosts.append(address)
+            print(hosts)
+            return hosts
         except:
+            print("you get an error")
             sys.exit("Invalid Host")
 #JL Edit V1
-def scan_port(target, port):
+def scan_port(target, port, ifServiceScan):
     '''
     :param target: target ip address
     :param port: port to scan
@@ -172,20 +182,91 @@ def scan_port(target, port):
     try:
         print(f"Scanning {target}... Port {port}")
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-
-        sock.settimeout(.2)
+        sock.settimeout(0.5)
         result = sock.connect_ex((target, port))
 
-        sock.close()
+        banner = ""
 
-        if result == 0:
-            return "OPEN"
+        if ifServiceScan:
+                if port in [21, 22, 23, 25, 110, 143, 3306, 5432, 6379, 6667]:
+                    try:
+                        banner = sock.recv(4096).decode(errors='ignore')
+                    except:
+                        banner = "NO BANNER"
+                elif port in [80, 8080, 8888, 9000, 9200, 10000]:
+                    probe = f"GET / HTTP/1.1\r\nHost: {target}\r\nConnection: close\r\n\r\n"
+                    try:
+                        sock.sendall(probe.encode())
+                        sock.settimeout(4)
+                        response = []
+                        while True:
+                            try:
+                                data = sock.recv(4096)
+
+
+                                if not data:
+                                    break
+                                response.append(data.decode(errors='ignore'))
+                            except socket.timeout:
+                                break
+                        raw = ''.join(response) if response else "NO BANNER"
+
+                        headers, _, body = raw.partition("\r\n\r\n")
+                        print(f"DEBUG HEADERS:\n{headers}")
+
+                        # Grab the Server line
+                        for line in headers.splitlines():
+                            line = line.strip()
+                            if line.lower().startswith("server:"):
+                                print(f"DEBUG SERVER:\n{line}")
+                                banner = line
+                                break
+                        else:
+                            banner = headers.splitlines()[0]
+                        print(f"DEBUG HEADERS:\n{banner}")
+                    except Exception:
+                        banner = "NO BANNER"
+        service = 'UNKNOWN'
+        banner = banner.strip()
+
+        try:
+            service = common_ports_dict[port]
+        except:
+            service = 'UNKNOWN'
+
+        if ifServiceScan:
+            return {
+                'host': target,
+                'port': port,
+                'service': service,
+                'banner': banner,
+                'state': 'OPEN' if result == 0 else 'CLOSED'
+            }
         else:
-            return "CLOSED"
+            return {
+                'host': target,
+                'port': port,
+                'service': service,
+                'state': 'OPEN' if result == 0 else 'CLOSED'
+            }
     except:
-        return "ERROR"
+        if ifServiceScan:
+               return {
+                'host': target,
+                'port': port,
+                'service': 'ERROR',
+                'banner': None,
+                'state': 'ERROR'
+                }
+        else:
+            return {
+                'host': target,
+                'port': port,
+                'service': 'ERROR',
+                'state': 'ERROR'
+            }
 # takes in the info and runs the scan then it outputs to a group of all the threads results for post processing
-def busybeeIFMultipleHosts(hosts, ports, delay, groupedResults, index):
+def busybeeIFMultipleHosts(hosts, ports, delay, groupedResults, index, ifServiceScan):
     '''
     :param delay: delay between scans
     :param ports: ports to scan
@@ -194,23 +275,16 @@ def busybeeIFMultipleHosts(hosts, ports, delay, groupedResults, index):
     :param index: id of thread
     '''
     # multiplies threads and delays to allow the user to have a precise delay so threads are staggered so the packet only gets sent so often
-    local = []
     for host in hosts:
+        local = []
+        target = host
         for port in ports:
-            if port in common_ports_dict:
-                # checks if port is one of the common ones
-                state = scan_port(host, port)
-                local.append([host,port,common_ports_dict[port],state])
-
-            else:
-                state = scan_port(host, port)
-                local.append([host,port,'UNKNOWN',state])
-            time.sleep(delay)
-    groupedResults[index] = local
+            local.append(scan_port(target, port, ifServiceScan))
+        groupedResults[index] = local
 
 
 # only do one host. so only split ports and not hosts
-def busyBeeIFOneHost(hosts, ports, delay, groupedResults, index):
+def busyBeeIFOneHost(hosts, ports, delay, groupedResults, index, ifServiceScan):
     '''
     :param hosts:
     :param ports:
@@ -223,13 +297,7 @@ def busyBeeIFOneHost(hosts, ports, delay, groupedResults, index):
     local = []
     target = hosts[0]
     for port in ports:
-        if port in common_ports_dict:
-            state = scan_port(target, port)
-            local.append([target, port, common_ports_dict[port], state])
-        else:
-            state = scan_port(target, port)
-            local.append([target, port, 'UNKNOWN', state])
-        time.sleep(delay)
+        local.append(scan_port(target, port, ifServiceScan))
     groupedResults[index] = local
 
 # start of the post-processing function, takes in the results and deals with it
@@ -267,15 +335,18 @@ def getPorts(portMode, numberOfHosts, start, end, threads):
     else:
         return listOfPorts
 
-def output(hosts, results):
+def output(hosts, results, ifServicescan):
     finalOutput = {host: [] for host in hosts}
     for host in hosts:
         seen = set()
         for group in results:
-            for ip, port, service, state in group:
-                if ip == host and port not in seen:
-                    finalOutput[ip].append([port,service,state])
-                    seen.add(port)
+            for result in group:
+                host = result.get('host')
+                if ifServicescan:
+                    finalOutput[host].append([result.get('port'), result.get('service'), result.get('state'), result.get('banner')])
+                else:
+                    finalOutput[host].append(
+                        [result.get('port'), result.get('service'), result.get('state')])
     return finalOutput
 
 #UnFinishedFUNC
@@ -312,34 +383,39 @@ def main():
                 hosts.append(host)
     else:
         hosts = flatHosts
-    print(hosts)
-
     ports = getPorts(args.portMode, len(hosts), args.start, args.end, args.threads)
     groupedResults = [[] for i in range(args.threads)]
     threads = []
+    threadCount = args.threads
     if(len(hosts) > 1):
         if len(hosts) < args.threads:
-            args.threads = len(hosts)
-    print(hosts)
+            threadCount = len(hosts)
 
     hostChunks = []
+
+    if len(hosts) == 0:
+        sys.exit('no hosts to scan')
+
     if len(hosts) > 1:
 
-        hostChunks = [[] for i in range(args.threads)]
+        hostChunks = [[] for i in range(threadCount)]
         for i in range(len(hosts)):
-            hostChunks[i % args.threads].append(hosts[i])
-
+            hostChunks[i % threadCount].append(hosts[i])
+    print(hostChunks)
     #create worker threads to then scan all ports. if 1 host is present splits up ports and if multiple hosts then splits up hosts
-    for t in range (args.threads):
+    print(len(hostChunks))
+    print()
+    for t in range (threadCount):
         if len(hosts) == 1:
-            thread = threading.Thread(target=busyBeeIFOneHost,args=(hosts, ports[t],args.delay, groupedResults, t))
+            thread = threading.Thread(target=busyBeeIFOneHost,args=(hosts, ports[t],args.delay, groupedResults, t, args.servicescan))
             threads.append(thread)
 
         else:
+            if threadCount == len(hosts):
+                print(t)
+                thread = threading.Thread(target=busyBeeIFOneHost,args=(hostChunks[t], ports, args.delay, groupedResults, t, args.servicescan))
 
-
-
-            thread = threading.Thread(target=busybeeIFMultipleHosts, args=(hostChunks[t], ports, args.delay, groupedResults, t))
+            thread = threading.Thread(target=busybeeIFMultipleHosts, args=(hostChunks[t], ports, args.delay, groupedResults, t, args.servicescan))
             threads.append(thread)
 
 
@@ -354,26 +430,42 @@ def main():
 
     scannedHosts = set()
     for group in groupedResults:
-        for host, port, service, state in group:
-            scannedHosts.add(host)
+        for result in group:
+            scannedHosts.add(result.get('host'))
 
-    final = output(scannedHosts, groupedResults)
+    final = output(scannedHosts, groupedResults, args.servicescan)
 
     target = stringInColor(Color.BOLDWHITE, 'port')
     serviceName = stringInColor(Color.BOLDWHITE, "service")
     stateName = stringInColor(Color.BOLDWHITE, "state")
-    for host in final.keys():
-        print("\nHost: " + stringInColor(Color.PURPLE,host))
-        print(f"{target:>15}  {serviceName:>25}{stateName:>30}")
-        for port, service, state in final[host]:
-            if state == 'OPEN':
-                state = stringInColor(Color.GREEN, state)
-                print(f"{port:<5} : {service:<25} | {state:>10}")
-            else:
-                if not args.display_only_open:
-                    state = stringInColor(Color.RED, state)
-                    print(f"{port:<5} : {service:<25} | {state:<10}")
+    if not args.servicescan:
 
+        for host in final.keys():
+            print("\nHost: " + stringInColor(Color.PURPLE,host))
+            print(f"{target:>15}  {serviceName:>25}{stateName:>30}")
+            for port, service, state in final[host]:
+                if state == 'OPEN':
+                    state = stringInColor(Color.GREEN, state)
+                    print(f"{port:<5} : {service:<25} | {state:>10}")
+                else:
+                    if not args.display_only_open:
+                        state = stringInColor(Color.RED, state)
+                        print(f"{port:<5} : {service:<25} | {state:<10}")
+    else:
+        for host in final.keys():
+            print("\nHost: " + stringInColor(Color.PURPLE,host))
+            print(f"{target:>15}  {serviceName:>25}{stateName:>30}")
+            seen = set()
+            for port, service, state, banner in final[host]:
+                if port not in seen:
+                    if state == 'OPEN':
+                        state = stringInColor(Color.GREEN, state)
+                        print(f"{port:<5} : {service:<25} | {state:>10} {str(banner):<20}")
+                    else:
+                        if not args.display_only_open:
+                            state = stringInColor(Color.RED, state)
+                            print(f"{port:<5} : {service:<25} | {state:<10} {str(banner):<20}")
+                    seen.add(port)
 
 main()
 
