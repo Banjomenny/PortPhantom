@@ -7,6 +7,7 @@ import time
 import os
 from enum import Enum
 
+
 #list of common ports to check against
 common_ports_dict = {
     20: "FTP Data",
