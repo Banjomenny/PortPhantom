@@ -424,11 +424,13 @@ def validate_ports(ports, args):
         print(stringInColor(Color.YELLOW, "⚠  PORT RANGE VALIDATION WARNING"))
         print("="*70)
         print(stringInColor(Color.YELLOW, 
-              f"[!] Scanning {len(well_known)} well-known ports (0-1023)."))
+              f"[!] You are scanning {len(well_known)} well-known ports."))
         print(stringInColor(Color.YELLOW, 
-              "[!] This may trigger IDS/IPS alerts!!!"))
+              f"[!] Total ports to scan: {len(ports)}"))
+        print(stringInColor(Color.YELLOW, 
+              "[!] This may trigger IDS/IPS alerts or security monitoring!"))
         print()
-        
+
         # Check for particularly sensitive ports
         sensitive_ports = {
             21: {
@@ -621,7 +623,8 @@ def main():
         for host in final.keys():
             print("\nHost: " + stringInColor(Color.PURPLE,host))
             print(f"{target:>15}  {serviceName:>25}{stateName:>30}")
-            for port, service, state in final[host]:
+            sorted_results = sorted(final[host], key=lambda x: x[0])
+            for port, service, state in sorted_results:
                 if state == 'OPEN':
                     state = stringInColor(Color.GREEN, state)
                     print(f"{port:<5} : {service:<25} | {state:>10}")
@@ -634,7 +637,8 @@ def main():
             print("\nHost: " + stringInColor(Color.PURPLE,host))
             print(f"{target:>15}  {serviceName:>25}{stateName:>30}")
             seen = set()
-            for port, service, state, banner in final[host]:
+            sorted_results = sorted(final[host], key=lambda x: x[0])
+            for port, service, state, banner in sorted_results:
                 if port not in seen:
                     if state == 'OPEN':
                         state = stringInColor(Color.GREEN, state)
