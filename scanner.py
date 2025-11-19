@@ -525,6 +525,204 @@ def output(hosts, results, ifServicescan):
                         [result.get('port'), result.get('service'), result.get('state')])
     return finalOutput
 
+
+def security_scan_report(finalOutput, args):
+    """
+    Task 11: Security Scanning - Check for vulnerabilities in open ports
+    """
+    if not args.show_vulns:
+        return
+    
+    # Define vulnerability database
+    VULNERABILITY_DB = {
+        21: {
+            'severity': 'HIGH',
+            'service': 'FTP',
+            'issue': 'FTP transmits credentials in plaintext',
+            'impact': 'Credentials can be intercepted by attackers',
+            'recommendation': 'Disable FTP and use SFTP (port 22) or FTPS instead'
+        },
+        23: {
+            'severity': 'CRITICAL',
+            'service': 'Telnet',
+            'issue': 'Telnet is completely unencrypted',
+            'impact': 'All traffic including passwords sent in plaintext',
+            'recommendation': 'Disable Telnet immediately, use SSH (port 22) instead'
+        },
+        69: {
+            'severity': 'MEDIUM',
+            'service': 'TFTP',
+            'issue': 'TFTP has no authentication mechanism',
+            'impact': 'Anyone can read/write files',
+            'recommendation': 'Disable TFTP or restrict access with firewall rules'
+        },
+        80: {
+            'severity': 'LOW',
+            'service': 'HTTP',
+            'issue': 'HTTP traffic is unencrypted',
+            'impact': 'Data can be intercepted in transit',
+            'recommendation': 'Use HTTPS (port 443) with valid SSL/TLS certificates'
+        },
+        135: {
+            'severity': 'HIGH',
+            'service': 'Microsoft RPC',
+            'issue': 'RPC exposed to network',
+            'impact': 'Target for WannaCry-style ransomware attacks',
+            'recommendation': 'Block port 135 at firewall, disable if not needed'
+        },
+        139: {
+            'severity': 'HIGH',
+            'service': 'NetBIOS',
+            'issue': 'NetBIOS can leak system information',
+            'impact': 'Attackers can enumerate users, shares, and services',
+            'recommendation': 'Disable NetBIOS or restrict to local network only'
+        },
+        445: {
+            'severity': 'CRITICAL',
+            'service': 'SMB',
+            'issue': 'SMB is prime ransomware attack vector (EternalBlue)',
+            'impact': 'Remote code execution, lateral movement, data theft',
+            'recommendation': 'Never expose SMB to internet, use VPN for remote access'
+        },
+        3306: {
+            'severity': 'CRITICAL',
+            'service': 'MySQL',
+            'issue': 'Database exposed to network',
+            'impact': 'Data breach, unauthorized access, data manipulation',
+            'recommendation': 'Bind to localhost only, use VPN or SSH tunnel for remote access'
+        },
+        3389: {
+            'severity': 'CRITICAL',
+            'service': 'RDP',
+            'issue': 'RDP is frequent ransomware entry point',
+            'impact': 'Brute force attacks, remote takeover, ransomware deployment',
+            'recommendation': 'Use VPN, enable NLA, implement account lockout policies'
+        },
+        5432: {
+            'severity': 'CRITICAL',
+            'service': 'PostgreSQL',
+            'issue': 'Database exposed to network',
+            'impact': 'Data breach, unauthorized access, data manipulation',
+            'recommendation': 'Bind to localhost only, use VPN or SSH tunnel for remote access'
+        },
+        6379: {
+            'severity': 'CRITICAL',
+            'service': 'Redis',
+            'issue': 'Redis often has no authentication by default',
+            'impact': 'Complete data access, code execution via Lua scripts',
+            'recommendation': 'Enable authentication, bind to localhost, use firewall'
+        },
+        27017: {
+            'severity': 'CRITICAL',
+            'service': 'MongoDB',
+            'issue': 'MongoDB frequently misconfigured without auth',
+            'impact': 'Data theft, ransomware, database deletion',
+            'recommendation': 'Enable authentication, bind to localhost, use VPN'
+        },
+        1433: {
+            'severity': 'HIGH',
+            'service': 'MS SQL Server',
+            'issue': 'SQL Server exposed to network',
+            'impact': 'Data breach, SQL injection attacks',
+            'recommendation': 'Restrict access, use Windows auth, enable encryption'
+        },
+        5900: {
+            'severity': 'HIGH',
+            'service': 'VNC',
+            'issue': 'VNC often has weak or no password',
+            'impact': 'Remote desktop access, full system control',
+            'recommendation': 'Use strong passwords, enable encryption, use SSH tunnel'
+        }
+    }
+    
+    # Collect vulnerabilities from scan results
+    vulnerabilities = {
+        'CRITICAL': [],
+        'HIGH': [],
+        'MEDIUM': [],
+        'LOW': []
+    }
+    
+    for host in finalOutput.keys():
+        for result in finalOutput[host]:
+            if args.servicescan:
+                port, service, state, banner = result
+            else:
+                port, service, state = result
+            
+            # Only report on OPEN ports with known vulnerabilities
+            if state == 'OPEN' and port in VULNERABILITY_DB:
+                vuln = VULNERABILITY_DB[port].copy()
+                vuln['host'] = host
+                vuln['port'] = port
+                vulnerabilities[vuln['severity']].append(vuln)
+    
+    # Check if any vulnerabilities found
+    total_vulns = sum(len(v) for v in vulnerabilities.values())
+    
+    if total_vulns == 0:
+        print("\n" + "="*70)
+        print(stringInColor(Color.GREEN, "✓ SECURITY SCAN: NO CRITICAL VULNERABILITIES DETECTED"))
+        print("="*70)
+        print(stringInColor(Color.GREEN, "[✓] No high-risk open ports found"))
+        print(stringInColor(Color.CYAN, "[i] This does not guarantee complete security"))
+        print(stringInColor(Color.CYAN, "[i] Always follow security best practices"))
+        print("="*70 + "\n")
+        return
+    
+    # Display vulnerability report
+    print("\n" + "="*70)
+    print(stringInColor(Color.BOLDRED, "⚠️  SECURITY VULNERABILITY REPORT"))
+    print("="*70)
+    print(stringInColor(Color.YELLOW, f"[!] {total_vulns} security issue(s) detected"))
+    print("="*70 + "\n")
+    
+    # Display CRITICAL vulnerabilities
+    if vulnerabilities['CRITICAL']:
+        print(stringInColor(Color.BOLDRED, f"🔴 CRITICAL SEVERITY ({len(vulnerabilities['CRITICAL'])} issues):"))
+        print("-"*70)
+        for vuln in vulnerabilities['CRITICAL']:
+            vuln_text = f"Host: {vuln['host']} | Port {vuln['port']} ({vuln['service']})"
+            print(f"\n{stringInColor(Color.BOLDRED, vuln_text)}")
+            print(f"  Issue: {vuln['issue']}")
+            print(f"  Impact: {vuln['impact']}")
+            print(f"  {stringInColor(Color.GREEN, '→ Fix:')} {vuln['recommendation']}")
+    
+    # Display HIGH vulnerabilities
+    if vulnerabilities['HIGH']:
+        print(stringInColor(Color.RED, f"🟠 HIGH SEVERITY ({len(vulnerabilities['HIGH'])} issues):"))
+        print("-"*70)
+        for vuln in vulnerabilities['HIGH']:
+            vuln_text = f"Host: {vuln['host']} | Port {vuln['port']} ({vuln['service']})"
+            print(f"\n{stringInColor(Color.RED, vuln_text)}")
+            print(f"  Issue: {vuln['issue']}")
+            print(f"  Impact: {vuln['impact']}")
+            print(f"  {stringInColor(Color.GREEN, '→ Fix:')} {vuln['recommendation']}")
+    
+    # Display MEDIUM vulnerabilities
+    if vulnerabilities['MEDIUM']:
+        print(stringInColor(Color.YELLOW, f"🟡 MEDIUM SEVERITY ({len(vulnerabilities['MEDIUM'])} issues):"))
+        print("-"*70)
+        for vuln in vulnerabilities['MEDIUM']:
+            vuln_text = f"Host: {vuln['host']} | Port {vuln['port']} ({vuln['service']})"
+            print(f"\n{stringInColor(Color.YELLOW, vuln_text)}")
+            print(f"  Issue: {vuln['issue']}")
+            print(f"  {stringInColor(Color.GREEN, '→ Fix:')} {vuln['recommendation']}")
+    
+    # Display LOW vulnerabilities
+    if vulnerabilities['LOW']:
+        print(stringInColor(Color.CYAN, f"🔵 LOW SEVERITY ({len(vulnerabilities['LOW'])} issues):"))
+        print("-"*70)
+        for vuln in vulnerabilities['LOW']:
+            vuln_text = f"Host: {vuln['host']} | Port {vuln['port']} ({vuln['service']})"
+            print(f"\n{stringInColor(Color.CYAN, vuln_text)}")
+            print(f"  Issue: {vuln['issue']}")
+            print(f"  {stringInColor(Color.GREEN, '→ Fix:')} {vuln['recommendation']}")
+    
+    print("="*70)
+    print(stringInColor(Color.BOLDRED, f"[!] TOTAL: {total_vulns} security vulnerabilities require attention"))
+    print("="*70 + "\n")
+
 #UnFinishedFUNC
 def main():
     args = parse_arguments()
@@ -564,6 +762,8 @@ def main():
     
     validate_ports(ports if isinstance(ports, list) else ports[0], args)
     
+
+
     groupedResults = [[] for i in range(args.threads)]
     threads = []
     threadCount = args.threads
@@ -648,6 +848,8 @@ def main():
                             state = stringInColor(Color.RED, state)
                             print(f"{port:<5} : {service:<25} | {state:<10} {str(banner):<20}")
                     seen.add(port)
+    
+    security_scan_report(final, args)
     
     if args.output_file or args.output_format != 'txt':
         outputFile(scanStart, final, args)
