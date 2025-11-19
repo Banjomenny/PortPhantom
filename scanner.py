@@ -67,7 +67,9 @@ class Color(Enum):
     PURPLE = 5
     CYAN = 6
     WHITE = 7
-
+    BOLDGREEN = 8
+    BOLDRED = 9
+    BOLDWHITE = 10
 def stringInColor(color,text ):
     '''
     :param color:  Color enum class value of the color you want
@@ -84,7 +86,10 @@ def stringInColor(color,text ):
      4: "\033[0;34m",
      5: "\033[0;35m",
      6: "\033[0;36m",
-     7: "\0333[0;37m"
+     7: "\0333[0;37m",
+     8: "\033[1;32m",
+     9: "\033[1;31m",
+     10: "\033[1;37m",
     }
     return COLORS[color.value] + text + RESET
 
@@ -289,13 +294,20 @@ def main():
             t.start()
         for t in threads:
             t.join()
-
+    target = stringInColor(Color.BOLDWHITE, "target")
+    service = stringInColor(Color.BOLDWHITE, "service")
+    state = stringInColor(Color.BOLDWHITE, "state")
+    print(f"    {target:<15}  {service:>25}{state:>35}")
     for group in groupedResults:
+
         for host, port, service, state in group:
             if state == 'OPEN':
                 state = stringInColor(Color.GREEN, state)
-                print(f"{host}:{port} ({service}) -> {state}")
-
+                print(f"{host}:{port:<5} : {service:<25} | {state:>10}")
+            else:
+                if not args.display_only_open:
+                    state = stringInColor(Color.RED, state)
+                    print(f"{host}:{port:<5} : {service:<25} | {state:<10}")
 
 
 main()
