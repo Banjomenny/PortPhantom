@@ -5,7 +5,6 @@ import sys
 import threading
 import time
 import os
-from asyncio import threads
 from enum import Enum
 
 
