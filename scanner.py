@@ -60,6 +60,170 @@ common_ports_dict = {
     27017: "MongoDB"
 }
 
+wellKnownPorts = {
+    0: "Reserved",
+    1: "TCPMUX",
+    5: "RJE",
+    7: "ECHO",
+    9: "DISCARD",
+    11: "SYSTAT",
+    13: "DAYTIME",
+    17: "QOTD",
+    18: "Message Send Protocol",
+    19: "CHARGEN",
+    20: "FTP Data",
+    21: "FTP Control",
+    22: "SSH",
+    23: "Telnet",
+    25: "SMTP",
+    26: "RSFTP",
+    35: "QMS Magicolor Printer",
+    37: "TIME",
+    38: "Route Access Protocol",
+    39: "Resource Location Protocol",
+    41: "Graphics",
+    42: "Host Name Server/WINS",
+    43: "WHOIS",
+    49: "TACACS",
+    53: "DNS",
+    57: "MTP",
+    67: "BOOTP/DHCP Server",
+    68: "BOOTP/DHCP Client",
+    69: "TFTP",
+    70: "Gopher",
+    79: "Finger",
+    80: "HTTP",
+    81: "Torpark ORPort",
+    82: "Torpark Control Port",
+    88: "Kerberos",
+    101: "HOSTNAME",
+    102: "ISO-TSAP / MS Exchange",
+    107: "Remote Telnet",
+    109: "POP2",
+    110: "POP3",
+    111: "SUNRPC",
+    113: "Ident",
+    115: "SFTP",
+    117: "UUCP-PATH",
+    118: "SQL Services",
+    119: "NNTP",
+    123: "NTP",
+    135: "Microsoft RPC Locator",
+    137: "NetBIOS Name Service",
+    138: "NetBIOS Datagram Service",
+    139: "NetBIOS Session Service",
+    143: "IMAP4",
+    152: "BFTP",
+    153: "SGMP",
+    156: "SQL Service",
+    157: "KNET VM Command",
+    158: "DMSP",
+    159: "NSS-Routing",
+    160: "SGMP-TRAPS",
+    161: "SNMP",
+    162: "SNMPTRAP",
+    170: "Print-srv",
+    179: "BGP",
+    190: "GACP",
+    191: "Prospero Directory",
+    192: "OSU Network Monitoring / SRMP",
+    194: "IRC",
+    201: "AppleTalk Routing",
+    209: "Quick Mail Transfer",
+    213: "IPX",
+    218: "MPP",
+    220: "IMAP v3",
+    259: "ESRO",
+    264: "BGMP",
+    311: "Apple Server Admin",
+    318: "TSP",
+    323: "IMMP",
+    366: "ODMR SMTP",
+    369: "Rpc2portmap",
+    371: "ClearCase albd",
+    384: "Remote Network Server",
+    387: "AURP",
+    389: "LDAP",
+    401: "UPS",
+    411: "Direct Connect Hub",
+    427: "SLP",
+    443: "HTTPS",
+    444: "SNPP",
+    445: "Microsoft-DS / SMB",
+    464: "Kerberos Password Change",
+    465: "SMTPS",
+    500: "ISAKMP/IKE",
+    512: "exec/comsat",
+    513: "Login/Who",
+    514: "rsh/syslog",
+    515: "LPD",
+    517: "Talk",
+    518: "NTalk",
+    520: "efs/RIP",
+    524: "NCP",
+    525: "Timed",
+    530: "RPC",
+    531: "AOL IM / IRC",
+    532: "netnews",
+    533: "netwall",
+    540: "UUCP",
+    542: "commerce",
+    543: "klogin",
+    544: "kshell",
+    546: "DHCPv6 Client",
+    547: "DHCPv6 Server",
+    548: "AFP",
+    550: "new-who",
+    554: "RTSP",
+    556: "Remotefs",
+    560: "rmonitor",
+    561: "monitor/chcmd",
+    563: "NNTPS",
+    587: "SMTP Submission",
+    591: "FileMaker Web Sharing",
+    593: "HTTP RPC Ep Map/DCOM",
+    604: "TUNNEL",
+    631: "IPP",
+    636: "LDAPS",
+    639: "MSDP",
+    646: "LDP",
+    647: "DHCP Failover",
+    648: "RRP",
+    652: "DTCP",
+    654: "AODV",
+    665: "sun-dr",
+    666: "Doom",
+    674: "ACAP",
+    691: "MS Exchange Routing",
+    692: "Hyperwave-ISP",
+    695: "IEEE-MMS-SSL",
+    698: "OLSR",
+    699: "Access Network",
+    700: "EPP",
+    701: "LMP",
+    702: "IRIS over BEEP",
+    706: "SILC",
+    711: "TDP",
+    712: "TBRPF",
+    720: "SMQP",
+    749: "Kerberos Admin",
+    750: "Kerberos IV",
+    782: "Conserver",
+    829: "CMP",
+    860: "iSCSI",
+    873: "rsync",
+    901: "SWAT",
+    902: "VMware Server",
+    911: "NCA Console",
+    981: "SofaWare HTTPS Mgmt",
+    989: "FTPS Data",
+    990: "FTPS Control",
+    991: "NAS",
+    992: "Telnet over SSL",
+    993: "IMAPS",
+    995: "POP3S",
+}
+
 
 
 
@@ -120,7 +284,7 @@ def parse_arguments():
     #allows for nice CLI argument parsing
     parser = argparse.ArgumentParser(description='network scanner',usage='scans a given network for open ports')
     parser.add_argument("-a", "--address", action='store', dest='address', required=True,help="you can use CIDR notation or a something like 1.1.1.1-100. or specify single host")
-    parser.add_argument('--mode', action='store',dest='portMode',choices=['common', 'range', 'all', 'single','wellKnown', 'web', 'database', 'remoteAccesss', 'fileShare', 'mail'], required=False, default='common',help='common is 1-1024, range you specify --startport and --endport and all is 1-65535')
+    parser.add_argument('--mode', action='store',dest='portMode',choices=['common', 'range', 'all', 'single','wellKnown', 'web', 'database', 'remoteAccess', 'fileShare', 'mail'], required=False, default='common',help='common is 1-1024, range you specify --startport and --endport and all is 1-65535')
     parser.add_argument('--start-port', type=int, action='store', dest='start', required=False, default=1,help='start port of range')
     parser.add_argument('--end-port', type=int, action='store', dest='end', required=False, default=1024,help='end port of range')
     parser.add_argument('-t', '--threads', type=int, action='store', dest='threads', required=False, default=1,help='number of threads')
@@ -237,10 +401,12 @@ def scan_port(target, port, ifServiceScan):
         service = 'UNKNOWN'
         banner = banner.strip()
 
-        try:
+        if port in common_ports_dict.keys():
             service = common_ports_dict[port]
-        except:
-            service = 'UNKNOWN'
+        elif port in wellKnownPorts.keys():
+            service = wellKnownPorts[port]
+        else:
+            service = 'TCP/UDP'
 
         if ifServiceScan:
             return {
@@ -862,13 +1028,12 @@ def main():
             sorted_results = sorted(final[host], key=lambda x: x[0])
             for port, service, state, banner in sorted_results:
                 if port not in seen:
-                    if state == 'OPEN':
+                    if state == 'OPEN' and (args.display == 'all' or args.display == 'open'):
                         state = stringInColor(Color.GREEN, state)
                         print(f"{port:<5} : {service:<25} | {state:>10} {str(banner):<20}")
-                    else:
-                        if not args.display_only_open:
-                            state = stringInColor(Color.RED, state)
-                            print(f"{port:<5} : {service:<25} | {state:<10} {str(banner):<20}")
+                    elif state == 'CLOSED' and (args.display == 'all' or args.display == 'closed'):
+                        state = stringInColor(Color.RED, state)
+                        print(f"{port:<5} : {service:<25} | {state:<10} {str(banner):<20}")
                     seen.add(port)
     
     security_scan_report(final, args)
