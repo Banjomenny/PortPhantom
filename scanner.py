@@ -6,6 +6,11 @@ import threading
 import time
 import os
 from enum import Enum
+from rich.progress import Progress, TextColumn, BarColumn, TimeRemainingColumn
+import pyfiglet as fig
+threadLock = threading.Lock()
+portScanned = 0
+
 
 
 #list of common ports to check against
@@ -313,8 +318,6 @@ def getIPaddresses(address, threads):
     hosts = []
     address = address.strip()
 
-    print(f"DEBUG: raw address string = {repr(address)}")
-
     if '/' in address:
         try:
             network = ipaddress.ip_network(address).hosts()
@@ -344,6 +347,18 @@ def getIPaddresses(address, threads):
             print("you get an error")
             sys.exit("Invalid Host")
 #JL Edit V1
+
+def scan_port_with_progress(target, port, ifServiceScan, progress, taskID):
+    result = scan_port(target, port, ifServiceScan)
+    global portScanned
+    with threadLock:
+        portScanned += 1
+        if portScanned % 10 == 0:
+            progress.update(taskID, completed=portScanned)
+
+    return result
+
+
 def scan_port(target, port, ifServiceScan):
     '''
     :param target: target ip address
@@ -351,8 +366,10 @@ def scan_port(target, port, ifServiceScan):
     :return: state of port
     '''
     """Simple port scanner -- checks if the port is actually open"""
+    global portScanned
+
     try:
-        print(f"Scanning {target}... Port {port}")
+
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(0.5)
         result = sock.connect_ex((target, port))
@@ -384,18 +401,18 @@ def scan_port(target, port, ifServiceScan):
                         raw = ''.join(response) if response else "NO BANNER"
 
                         headers, _, body = raw.partition("\r\n\r\n")
-                        print(f"DEBUG HEADERS:\n{headers}")
+
 
                         # Grab the Server line
                         for line in headers.splitlines():
                             line = line.strip()
                             if line.lower().startswith("server:"):
-                                print(f"DEBUG SERVER:\n{line}")
+
                                 banner = line
                                 break
                         else:
                             banner = headers.splitlines()[0]
-                        print(f"DEBUG HEADERS:\n{banner}")
+
                     except Exception:
                         banner = "NO BANNER"
         service = 'UNKNOWN'
@@ -440,7 +457,7 @@ def scan_port(target, port, ifServiceScan):
                 'state': 'ERROR'
             }
 # takes in the info and runs the scan then it outputs to a group of all the threads results for post processing
-def busybeeIFMultipleHosts(hosts, ports, delay, groupedResults, index, ifServiceScan):
+def busybeeIFMultipleHosts(hosts, ports, delay, groupedResults, index, ifServiceScan, progress, taskID):
     '''
     :param delay: delay between scans
     :param ports: ports to scan
@@ -453,12 +470,12 @@ def busybeeIFMultipleHosts(hosts, ports, delay, groupedResults, index, ifService
         local = []
         target = host
         for port in ports:
-            local.append(scan_port(target, port, ifServiceScan))
+            local.append(scan_port_with_progress(target, port, ifServiceScan, progress,taskID))
         groupedResults[index] = local
 
 
 # only do one host. so only split ports and not hosts
-def busyBeeIFOneHost(hosts, ports, delay, groupedResults, index, ifServiceScan):
+def busyBeeIFOneHost(hosts, ports, delay, groupedResults, index, ifServiceScan, progress,taskID):
     '''
     :param hosts:
     :param ports:
@@ -471,7 +488,7 @@ def busyBeeIFOneHost(hosts, ports, delay, groupedResults, index, ifServiceScan):
     local = []
     target = hosts[0]
     for port in ports:
-        local.append(scan_port(target, port, ifServiceScan))
+        local.append(scan_port_with_progress(target, port, ifServiceScan, progress,taskID))
     groupedResults[index] = local
 
 def save_as_csv(fileName, finalOutput, args):
@@ -970,28 +987,33 @@ def main():
         hostChunks = [[] for i in range(threadCount)]
         for i in range(len(hosts)):
             hostChunks[i % threadCount].append(hosts[i])
-    print(hostChunks)
-    #create worker threads to then scan all ports. if 1 host is present splits up ports and if multiple hosts then splits up hosts
-    print(len(hostChunks))
-    print()
-    for t in range (threadCount):
-        if len(hosts) == 1:
-            thread = threading.Thread(target=busyBeeIFOneHost,args=(hosts, ports[t],args.delay, groupedResults, t, args.servicescan))
-            threads.append(thread)
 
-        else:
-            if threadCount == len(hosts):
-                print(t)
-                thread = threading.Thread(target=busyBeeIFOneHost,args=(hostChunks[t], ports, args.delay, groupedResults, t, args.servicescan))
+    total_ports = len(hosts) * len(ports)
 
-            thread = threading.Thread(target=busybeeIFMultipleHosts, args=(hostChunks[t], ports, args.delay, groupedResults, t, args.servicescan))
-            threads.append(thread)
+    with Progress(
+            TextColumn("[bold blue]{task.description}"),
+            BarColumn(),
+            "[progress.percentage]{task.percentage:>3.0f}%",
+            TimeRemainingColumn(),
+    ) as progress:
+
+        # Create one task for the whole scan
+        taskID = progress.add_task("Scanning all hosts", total=total_ports)
+
+        for t in range (threadCount):
+            if len(hosts) == 1:
+                thread = threading.Thread(target=busyBeeIFOneHost,args=(hosts, ports[t],args.delay, groupedResults, t, args.servicescan, progress, taskID))
+                threads.append(thread)
+
+            else:
+                thread = threading.Thread(target=busybeeIFMultipleHosts, args=(hostChunks[t], ports, args.delay, groupedResults, t, args.servicescan, progress, taskID))
+                threads.append(thread)
 
 
-    for t in threads:
-         t.start()
-    for t in threads:
-        t.join()
+        for t in threads:
+             t.start()
+        for t in threads:
+            t.join()
 
     scanEnd = time.time()
     elapsedTime = scanEnd - scanStart
