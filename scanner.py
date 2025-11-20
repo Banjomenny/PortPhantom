@@ -120,18 +120,25 @@ def parse_arguments():
     #allows for nice CLI argument parsing
     parser = argparse.ArgumentParser(description='network scanner',usage='scans a given network for open ports')
     parser.add_argument("-a", "--address", action='store', dest='address', required=True,help="you can use CIDR notation or a something like 1.1.1.1-100. or specify single host")
-    parser.add_argument('--mode', action='store',dest='portMode',choices=['common', 'range', 'all', 'single'], required=False, default='common',help='common is 1-1024, range you specify --startport and --endport and all is 1-65535')
+    parser.add_argument('--mode', action='store',dest='portMode',choices=['common', 'range', 'all', 'single','wellKnown', 'web', 'database', 'remoteAccesss', 'fileShare', 'mail'], required=False, default='common',help='common is 1-1024, range you specify --startport and --endport and all is 1-65535')
     parser.add_argument('--start-port', type=int, action='store', dest='start', required=False, default=1,help='start port of range')
     parser.add_argument('--end-port', type=int, action='store', dest='end', required=False, default=1024,help='end port of range')
     parser.add_argument('-t', '--threads', type=int, action='store', dest='threads', required=False, default=1,help='number of threads')
     parser.add_argument('-d', '--delay', type=float, action='store', dest='delay', required=False, default=0.1,help='delay in seconds')
-    parser.add_argument('--display-only-open', action='store_true', dest='display_only_open', required=False, default=False, help='display only open port')
+    parser.add_argument('--display', action='store',choices=['all','open','closed'], dest='display', required=False, default='all', help='chose what ports to be diplayed, all, open, closed')
+    parser.add_argument('-p','--port', action='store', dest='port', required=False, default=None,help='choose the port you want or a list like 1,2,3,4,5,6,7')
     parser.add_argument('--output-to-file', type=str, dest='output_file', required=False, default=None, help='output filename (e.g., results.txt or results.csv)') #JL output
     parser.add_argument('--output-format', choices=['txt', 'csv'], default='txt', help='output format: txt or csv') #JL output
     parser.add_argument('--servicescan', action='store_true', dest='servicescan', required=False, default=False, help='service scan')
     parser.add_argument('--show-vulns', action='store_true', dest='show_vulns', required=False, default=False,help='show vulnerabilities')
     parser.add_argument('--do-pings', action='store_true', dest='do_pings', required=False, default=False,help='ping service')
     return parser.parse_args()
+
+def parsePort(input):
+    ports = None
+    if input:
+        ports = input.split(',')
+    return ports
 
 def getIPaddresses(address, threads):
     '''
@@ -379,7 +386,7 @@ def outputFile(timestamp, finalOutput, args):
     
     print(f"\n[+] Results saved to: {fileName}")
 
-def getPorts(portMode, numberOfHosts, start, end, threads):
+def getPorts(portMode, numberOfHosts, start, end, threads, inputPorts = None):
     '''
     :param portMode: common, range, all
     :param numberOfHosts: number of hosts to scan
@@ -388,24 +395,40 @@ def getPorts(portMode, numberOfHosts, start, end, threads):
     :param threads: number of threads
     :return: list of ports to scan or lists of ports to scan
     '''
-    listOfPorts = []
-    if portMode == "common":
-       listOfPorts = list(common_ports_dict.keys())
-    elif portMode == "all":
-        listOfPorts = list(range(1,65536))
-    elif portMode == "range":
-        listOfPorts = list(range(start, end+1))
+    if inputPorts:
+        return parsePort(inputPorts)
     else:
-        raise sys.exit("Invalid portMode")
+        listOfPorts = []
+        match portMode:
+            case 'common':
+                listOfPorts = list(common_ports_dict.keys())
+            case 'wellKnown':
+                listOfPorts = list(range(1, 1025))
+            case 'range':
+                listOfPorts = list(range(start, end + 1))
+            case 'all':
+                listOfPorts = list(range(1, 65536))
+            case 'web':
+                listOfPorts = [80,443,8080,8443,8888,9000,9200,10000]
+            case 'database':
+                listOfPorts = [1433,1521,3306,5432,27017,6479]
+            case 'mail':
+                listOfPorts = [25,465,587,110,995,143,993]
+            case 'remoteAccess':
+                listOfPorts = [22,23,3389,5900]
+            case 'fileShare':
+                listOfPorts = [20,21,445,137,138,139,69]
+            case _:
+                listOfPorts =list(range(1, 1025))
 
-    if numberOfHosts == 1:
-        temp = [[] for i in range(threads)]
-        for i in range(len(listOfPorts)):
-            temp[i % threads].append(listOfPorts[i])
-        return temp
+        if numberOfHosts == 1:
+            temp = [[] for i in range(threads)]
+            for i in range(len(listOfPorts)):
+                temp[i % threads].append(listOfPorts[i])
+            return temp
 
-    else:
-        return listOfPorts
+        else:
+            return listOfPorts
 
 def validate_ports(ports, args):
     """
@@ -825,13 +848,12 @@ def main():
             print(f"{target:>15}  {serviceName:>25}{stateName:>30}")
             sorted_results = sorted(final[host], key=lambda x: x[0])
             for port, service, state in sorted_results:
-                if state == 'OPEN':
+                if state == 'OPEN' and (args.display == 'all' or args.display == 'open'):
                     state = stringInColor(Color.GREEN, state)
                     print(f"{port:<5} : {service:<25} | {state:>10}")
-                else:
-                    if not args.display_only_open:
-                        state = stringInColor(Color.RED, state)
-                        print(f"{port:<5} : {service:<25} | {state:<10}")
+                elif state == 'CLOSED' and (args.display == 'all' or args.display == 'closed'):
+                    state = stringInColor(Color.RED, state)
+                    print(f"{port:<5} : {service:<25} | {state:<10}")
     else:
         for host in final.keys():
             print("\nHost: " + stringInColor(Color.PURPLE,host))
