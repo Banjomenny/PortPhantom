@@ -6,8 +6,15 @@ import threading
 import time
 import os
 from enum import Enum
+
+import pyfiglet
+from rich.align import Align
+from rich.console import Console
+from rich.panel import Panel
 from rich.progress import Progress, TextColumn, BarColumn, TimeRemainingColumn
-import pyfiglet as fig
+from rich.table import Table
+from rich.text import Text
+
 threadLock = threading.Lock()
 portScanned = 0
 
@@ -304,9 +311,15 @@ def parse_arguments():
     return parser.parse_args()
 
 def parsePort(input):
-    ports = None
+    portsstr = None
+    ports = []
     if input:
-        ports = input.split(',')
+        portsstr = input.split(',')
+    for port in portsstr:
+        try:
+            ports.append(int(port))
+        except ValueError:
+            raise argparse.ArgumentTypeError("Invalid port number")
     return ports
 
 def getIPaddresses(address, threads):
@@ -341,7 +354,6 @@ def getIPaddresses(address, threads):
     else:
         try:
             hosts.append(address)
-            print(hosts)
             return hosts
         except:
             print("you get an error")
@@ -353,8 +365,7 @@ def scan_port_with_progress(target, port, ifServiceScan, progress, taskID):
     global portScanned
     with threadLock:
         portScanned += 1
-        if portScanned % 10 == 0:
-            progress.update(taskID, completed=portScanned)
+        progress.update(taskID, completed=portScanned)
 
     return result
 
@@ -398,7 +409,7 @@ def scan_port(target, port, ifServiceScan):
                                 response.append(data.decode(errors='ignore'))
                             except socket.timeout:
                                 break
-                        raw = ''.join(response) if response else "NO BANNER"
+                        raw = ''.join(response) if response else None
 
                         headers, _, body = raw.partition("\r\n\r\n")
 
@@ -466,11 +477,17 @@ def busybeeIFMultipleHosts(hosts, ports, delay, groupedResults, index, ifService
     :param index: id of thread
     '''
     # multiplies threads and delays to allow the user to have a precise delay so threads are staggered so the packet only gets sent so often
+
+
     for host in hosts:
         local = []
         target = host
-        for port in ports:
-            local.append(scan_port_with_progress(target, port, ifServiceScan, progress,taskID))
+        if isinstance(ports, list):
+            for port in ports:
+                local.append(scan_port_with_progress(target, port, ifServiceScan, progress,taskID))
+
+        else:
+            local.append(scan_port_with_progress(target, ports, ifServiceScan, progress, taskID))
         groupedResults[index] = local
 
 
@@ -487,8 +504,12 @@ def busyBeeIFOneHost(hosts, ports, delay, groupedResults, index, ifServiceScan, 
 
     local = []
     target = hosts[0]
-    for port in ports:
-        local.append(scan_port_with_progress(target, port, ifServiceScan, progress,taskID))
+    if isinstance(ports, list):
+        for port in ports:
+            local.append(scan_port_with_progress(target, port, ifServiceScan, progress, taskID))
+
+    else:
+        local.append(scan_port_with_progress(target, ports, ifServiceScan, progress, taskID))
     groupedResults[index] = local
 
 def save_as_csv(fileName, finalOutput, args):
@@ -504,7 +525,7 @@ def save_as_csv(fileName, finalOutput, args):
                 for result in finalOutput[host]:
                     port, service, state, banner = result
                     if not args.display_only_open or state == 'OPEN':
-                        banner_text = banner if banner and banner != "NO BANNER" else ""
+                        banner_text = banner if banner else ""
                         writer.writerow([host, port, service, state, banner_text])
         else:
             writer = csv.writer(f)
@@ -571,6 +592,7 @@ def outputFile(timestamp, finalOutput, args):
 
 def getPorts(portMode, numberOfHosts, start, end, threads, inputPorts = None):
     '''
+    :param inputPorts:
     :param portMode: common, range, all
     :param numberOfHosts: number of hosts to scan
     :param start: start port
@@ -635,7 +657,9 @@ def validate_ports(ports, args):
               f"[!] Total ports to scan: {len(ports)}"))
         print(stringInColor(Color.YELLOW, 
               "[!] This may trigger IDS/IPS alerts or security monitoring!"))
-        print()
+        input(stringInColor(Color.YELLOW,
+                    "Press any key to continue SCANNING"))
+
 
         # Check for particularly sensitive ports
         sensitive_ports = {
@@ -716,6 +740,10 @@ def validate_ports(ports, args):
                 print(f"  {stringInColor(Color.GREEN, '✓ Recommendation:')} {info['recommendation']}")
         
         print("\n" + "="*70 + "\n")
+        input(stringInColor(Color.YELLOW,
+                            "Are you still sure you wanna continue SCANNING?"))
+        print('\n\n')
+
 
 def output(hosts, results, ifServicescan):
     finalOutput = {host: [] for host in hosts}
@@ -945,7 +973,17 @@ def main():
     try: int(args.end)
     except ValueError: sys.exit('wrong value for endport: needs to be int')
 
-
+    Title = pyfiglet.figlet_format("Scanner", font="bloody")
+    console = Console(force_terminal=True)
+    console.print(f"[bold red]{Title}[/bold red]", justify="center")
+    info = Text()
+    info.append("Coded By : Benjamin and Josh\n", style="bold cyan")
+    info.append("Version   : 1.0.0\n", style="bold cyan")
+    info.append("Team      : BenNjosh\n", style="bold cyan")
+    info.append("GitHub    : coming soon\n", style="bold cyan")
+    info = Align.center(info)
+    panel = Panel(info, title="[bold green]Scanner Info", border_style="bright_white")
+    console.print(panel)
 
     prehosts = getIPaddresses(args.address, args.threads)
     flatHosts = []
@@ -963,20 +1001,20 @@ def main():
                 hosts.append(host)
     else:
         hosts = flatHosts
-    ports = getPorts(args.portMode, len(hosts), args.start, args.end, args.threads)
-    
-    
-    validate_ports(ports if isinstance(ports, list) else ports[0], args)
-    
+    ports = getPorts(args.portMode, len(hosts), args.start, args.end, args.threads, args.port)
 
+    validate_ports(ports if isinstance(ports, list) else ports[0], args)
 
     groupedResults = [[] for i in range(args.threads)]
     threads = []
     threadCount = args.threads
-    if(len(hosts) > 1):
+    if (len(hosts) > 1):
         if len(hosts) < args.threads:
             threadCount = len(hosts)
 
+    if (len(ports) > 1):
+        if len(ports) < args.threads:
+            threadCount = len(ports)
     hostChunks = []
 
     if len(hosts) == 0:
@@ -1000,24 +1038,22 @@ def main():
         # Create one task for the whole scan
         taskID = progress.add_task("Scanning all hosts", total=total_ports)
 
-        for t in range (threadCount):
+        for t in range(threadCount):
             if len(hosts) == 1:
-                thread = threading.Thread(target=busyBeeIFOneHost,args=(hosts, ports[t],args.delay, groupedResults, t, args.servicescan, progress, taskID))
+                thread = threading.Thread(target=busyBeeIFOneHost, args=(
+                hosts, ports[t], args.delay, groupedResults, t, args.servicescan, progress, taskID))
                 threads.append(thread)
 
             else:
-                thread = threading.Thread(target=busybeeIFMultipleHosts, args=(hostChunks[t], ports, args.delay, groupedResults, t, args.servicescan, progress, taskID))
+                thread = threading.Thread(target=busybeeIFMultipleHosts, args=(
+                hostChunks[t], ports, args.delay, groupedResults, t, args.servicescan, progress, taskID))
                 threads.append(thread)
 
-
         for t in threads:
-             t.start()
+            t.start()
         for t in threads:
             t.join()
 
-    scanEnd = time.time()
-    elapsedTime = scanEnd - scanStart
-    print("Elapsed time: " + str(elapsedTime))
 
     scannedHosts = set()
     for group in groupedResults:
@@ -1026,40 +1062,40 @@ def main():
 
     final = output(scannedHosts, groupedResults, args.servicescan)
 
-    target = stringInColor(Color.BOLDWHITE, 'port')
-    serviceName = stringInColor(Color.BOLDWHITE, "service")
-    stateName = stringInColor(Color.BOLDWHITE, "state")
     if not args.servicescan:
 
         for host in final.keys():
-            print("\nHost: " + stringInColor(Color.PURPLE,host))
-            print(f"{target:>15}  {serviceName:>25}{stateName:>30}")
+            console.print(f"\n [bold purple]Host:[/bold purple] [bold blue]{host}[/bold blue]")
+            table = Table(show_header=True, header_style="bold blue")
+            table.add_column("Port", justify="right")
+            table.add_column("Service", justify="left")
+            table.add_column("State", justify="right")
             sorted_results = sorted(final[host], key=lambda x: x[0])
             for port, service, state in sorted_results:
                 if state == 'OPEN' and (args.display == 'all' or args.display == 'open'):
-                    state = stringInColor(Color.GREEN, state)
-                    print(f"{port:<5} : {service:<25} | {state:>10}")
+                    table.add_row(str(port), service, f"[bold green]{state}[/bold green]")
                 elif state == 'CLOSED' and (args.display == 'all' or args.display == 'closed'):
-                    state = stringInColor(Color.RED, state)
-                    print(f"{port:<5} : {service:<25} | {state:<10}")
+                    table.add_row(str(port), service, f"[bold red]{state}[/bold red]")
     else:
         for host in final.keys():
-            print("\nHost: " + stringInColor(Color.PURPLE,host))
-            print(f"{target:>15}  {serviceName:>25}{stateName:>30}")
+            console.print(f"\n [bold purple]Host:[/bold purple] [bold blue]{host}[/bold blue]")
+            table = Table(show_header=True, header_style="bold blue")
+            table.add_column("Port", justify="right")
+            table.add_column("Service", justify="left")
+            table.add_column("State", justify="right")
+            table.add_column("Banner", justify="right")
             seen = set()
             sorted_results = sorted(final[host], key=lambda x: x[0])
             for port, service, state, banner in sorted_results:
                 if port not in seen:
                     if state == 'OPEN' and (args.display == 'all' or args.display == 'open'):
-                        state = stringInColor(Color.GREEN, state)
-                        print(f"{port:<5} : {service:<25} | {state:>10} {str(banner):<20}")
+                         table.add_row(str(port), service, f"[bold green]{state}[/bold green]", banner)
                     elif state == 'CLOSED' and (args.display == 'all' or args.display == 'closed'):
-                        state = stringInColor(Color.RED, state)
-                        print(f"{port:<5} : {service:<25} | {state:<10} {str(banner):<20}")
+                        table.add_row(str(port), service, f"[bold red]{state}[/bold red]", banner)
                     seen.add(port)
-    
+            console.print(table)
     security_scan_report(final, args)
-    
+
     if args.output_file or args.output_format != 'txt':
         outputFile(scanStart, final, args)
 
