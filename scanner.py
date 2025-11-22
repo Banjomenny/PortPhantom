@@ -524,7 +524,10 @@ def save_as_csv(fileName, finalOutput, args):
             for host in finalOutput.keys():
                 for result in finalOutput[host]:
                     port, service, state, banner = result
-                    if not args.display_only_open or state == 'OPEN':
+                    
+                    if args.display == 'all' or \
+                       (args.display == 'open' and state == 'OPEN') or \
+                       (args.display == 'closed' and state == 'CLOSED'):
                         banner_text = banner if banner else ""
                         writer.writerow([host, port, service, state, banner_text])
         else:
@@ -534,7 +537,10 @@ def save_as_csv(fileName, finalOutput, args):
             for host in finalOutput.keys():
                 for result in finalOutput[host]:
                     port, service, state = result
-                    if not args.display_only_open or state == 'OPEN':
+                
+                    if args.display == 'all' or \
+                       (args.display == 'open' and state == 'OPEN') or \
+                       (args.display == 'closed' and state == 'CLOSED'):
                         writer.writerow([host, port, service, state])
 
 def save_as_txt(fileName, finalOutput, args):
@@ -558,14 +564,20 @@ def save_as_txt(fileName, finalOutput, args):
             for result in finalOutput[host]:
                 if args.servicescan:
                     port, service, state, banner = result
-                    if not args.display_only_open or state == 'OPEN':
+                    # ✅ NEW: Respect --display filter
+                    if args.display == 'all' or \
+                       (args.display == 'open' and state == 'OPEN') or \
+                       (args.display == 'closed' and state == 'CLOSED'):
                         f.write(f"{port:<10} {service:<25} {state:<10}")
                         if banner and banner != "NO BANNER":
                             f.write(f" | {banner[:50]}")
                         f.write("\n")
                 else:
                     port, service, state = result
-                    if not args.display_only_open or state == 'OPEN':
+                    # ✅ NEW: Respect --display filter
+                    if args.display == 'all' or \
+                       (args.display == 'open' and state == 'OPEN') or \
+                       (args.display == 'closed' and state == 'CLOSED'):
                         f.write(f"{port:<10} {service:<25} {state:<10}\n")
         
         f.write("\n" + "="*70 + "\n")
@@ -744,6 +756,119 @@ def validate_ports(ports, args):
                             "Are you still sure you wanna continue SCANNING?"))
         print('\n\n')
 
+def validate_open_ports(finalOutput, args):
+    """
+    Task 8: Port Validation - Warn about OPEN sensitive ports AFTER scan completes
+    """
+    # Collect all OPEN ports from scan results
+    open_ports = set()
+    for host in finalOutput.keys():
+        for result in finalOutput[host]:
+            if args.servicescan:
+                port, service, state, banner = result
+            else:
+                port, service, state = result
+            
+            if state == 'OPEN':
+                open_ports.add(port)
+    
+    if not open_ports:
+        return  # No open ports, nothing to warn about
+    
+    # Check for well-known ports
+    well_known = [p for p in open_ports if p < 1024]
+    
+    if well_known:
+        print("\n" + "="*70)
+        print(stringInColor(Color.YELLOW, "⚠  OPEN PORT SECURITY WARNING"))
+        print("="*70)
+        print(stringInColor(Color.YELLOW, 
+              f"[!] Found {len(well_known)} open well-known ports."))
+        print(stringInColor(Color.YELLOW, 
+              f"[!] Total open ports: {len(open_ports)}"))
+        print(stringInColor(Color.YELLOW, 
+              "[!] These ports may be vulnerable to attacks!"))
+        print()
+
+        # Check for particularly sensitive ports
+        sensitive_ports = {
+            21: {
+                'name': 'FTP',
+                'risk': 'Often targeted, logs access attempts',
+                'recommendation': 'Use SFTP (port 22) or FTPS instead'
+            },
+            22: {
+                'name': 'SSH',
+                'risk': 'Failed attempts trigger security alerts',
+                'recommendation': 'Ensure you have authorization and strong passwords'
+            },
+            23: {
+                'name': 'Telnet',
+                'risk': 'Insecure protocol, Not Encrypted, heavily monitored',
+                'recommendation': 'DISABLE IMMEDIATELY - Use SSH (port 22) instead'
+            },
+            25: {
+                'name': 'SMTP',
+                'risk': 'Mail server may be exploited for spam',
+                'recommendation': 'Ensure authentication is required'
+            },
+            135: {
+                'name': 'Microsoft RPC',
+                'risk': 'Common ransomware target, heavily monitored',
+                'recommendation': 'Block at firewall, disable if not needed'
+            },
+            139: {
+                'name': 'NetBIOS',
+                'risk': 'Can leak system information',
+                'recommendation': 'Should not be exposed to internet'
+            },
+            445: {
+                'name': 'SMB',
+                'risk': 'EternalBlue exploit vector, heavily monitored',
+                'recommendation': 'CRITICAL: Never expose SMB to internet!'
+            },
+            3306: {
+                'name': 'MySQL',
+                'risk': 'Database should not be internet facing',
+                'recommendation': 'Bind to localhost, use VPN or SSH tunnel'
+            },
+            3389: {
+                'name': 'RDP',
+                'risk': 'Prime target for ransomware attacks',
+                'recommendation': 'Use VPN, enable NLA, implement lockout policies'
+            },
+            5432: {
+                'name': 'PostgreSQL',
+                'risk': 'Database should not be internet-facing',
+                'recommendation': 'Bind to localhost, use VPN or SSH tunnel'
+            },
+            6379: {
+                'name': 'Redis',
+                'risk': 'Often left with no authentication',
+                'recommendation': 'Should NEVER be exposed to internet'
+            },
+            27017: {
+                'name': 'MongoDB',
+                'risk': 'Frequently targeted for data theft',
+                'recommendation': 'Enable authentication and use VPN'
+            }
+        }
+        
+        # Display warnings for OPEN sensitive ports only
+        found_sensitive = False
+        for port in open_ports:
+            if port in sensitive_ports:
+                if not found_sensitive:
+                    print(stringInColor(Color.BOLDRED, "⚠️  CRITICAL: SENSITIVE PORTS ARE OPEN!"))
+                    print("-"*70)
+                found_sensitive = True
+                
+                info = sensitive_ports[port]
+                print(f"\n{stringInColor(Color.BOLDRED, f'Port {port}')} ({info['name']}) - OPEN")
+                print(f"  Risk: {info['risk']}")
+                print(f"  {stringInColor(Color.GREEN, '✓ Recommendation:')} {info['recommendation']}")
+        
+        print("\n" + "="*70 + "\n")
 
 def output(hosts, results, ifServicescan):
     finalOutput = {host: [] for host in hosts}
@@ -1076,6 +1201,7 @@ def main():
                     table.add_row(str(port), service, f"[bold green]{state}[/bold green]")
                 elif state == 'CLOSED' and (args.display == 'all' or args.display == 'closed'):
                     table.add_row(str(port), service, f"[bold red]{state}[/bold red]")
+            console.print(table)
     else:
         for host in final.keys():
             console.print(f"\n [bold purple]Host:[/bold purple] [bold blue]{host}[/bold blue]")
@@ -1094,6 +1220,9 @@ def main():
                         table.add_row(str(port), service, f"[bold red]{state}[/bold red]", banner)
                     seen.add(port)
             console.print(table)
+
+    validate_open_ports(final, args)
+
     security_scan_report(final, args)
 
     if args.output_file or args.output_format != 'txt':
