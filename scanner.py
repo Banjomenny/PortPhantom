@@ -1,5 +1,7 @@
 
 import ipaddress
+from concurrent.futures import ThreadPoolExecutor
+
 import pyfiglet
 from rich.align import Align
 from rich.console import Console
@@ -8,7 +10,7 @@ from rich.progress import Progress, TextColumn, BarColumn, TimeRemainingColumn
 from rich.table import Table
 from rich.text import Text
 from scapy.all import *
-from scapy.layers.inet import IP, ICMP
+from scapy.layers.inet import IP, ICMP, TCP
 
 threadLock = threading.Lock()
 portScanned = 0
@@ -291,8 +293,9 @@ def parse_arguments():
     #allows for nice CLI argument parsing
     parser = argparse.ArgumentParser(description='network scanner',usage='scans a given network for open ports')
     parser.add_argument("-a", "--address", action='store', dest='address', required=False,help="you can use CIDR notation or a something like 1.1.1.1-100. or specify single host")
-    parser.add_argument('--mode', action='store',dest='portMode',choices=['common', 'range', 'all', 'single','wellKnown', 'web', 'database', 'remoteAccess', 'fileShare', 'mail'], required=False, default='common',help='common is 1-1024, range you specify --startport and --endport and all is 1-65535')
+    parser.add_argument('--portList', action='store',dest='portMode',choices=['common', 'range', 'all', 'single','wellKnown', 'web', 'database', 'remoteAccess', 'fileShare', 'mail'], required=False, default='common',help='common is 1-1024, range you specify --startport and --endport and all is 1-65535')
     parser.add_argument('--start-port', type=int, action='store', dest='start', required=False, default=1,help='start port of range')
+    parser.add_argument('--scantype', action='store', dest='scanType',choices=['connect','syn','ack','rst','fin','arpping'], required=False, default='connect', help='connect: Connect Scan, syn: synScan, ack: ackScan, rst: resetScan, fin: finScan')
     parser.add_argument('--end-port', type=int, action='store', dest='end', required=False, default=1024,help='end port of range')
     parser.add_argument('-t', '--threads', type=int, action='store', dest='threads', required=False, default=1,help='number of threads')
     parser.add_argument('-d', '--delay', type=float, action='store', dest='delay', required=False, default=0.1,help='delay in seconds')
@@ -618,34 +621,97 @@ def osDetection(hostOutput, host):
                 if keyword.lower() in banner.lower():
                     return "MacOS"
     except Exception as e:
-        print("Error parsing banners:", e)
         OS = ''
 
     packet = IP(dst=host)/ICMP()
     reply = sr1(packet, timeout=2, verbose=0)
-
+    print("TTL reply:", reply.ttl if reply else None)
     if reply is None:
         return OS if OS else "No response"
 
     ttl = reply.ttl
     if OS == '':
-        if ttl >= 255:
-            OS = 'likely Cisco/network device'
-        elif ttl >= 128:
-            OS = 'likely Windows'
-        elif ttl >= 64:
+        if ttl <= 64:
             OS = 'likely Linux/macOS/Unix'
+        elif ttl <= 128:
+            OS = 'likely Windows'
+        elif ttl <= 255:
+            OS = 'likely Cisco/network device'
         else:
-            OS = f'Unknown OS (TTL={ttl})'
-
+            OS = f'Unknown OS'
     return OS
 
 
 
+def scapyScan(host, ports, type, progress, taskID):
+    results = []
+    flag = {'syn':'S','ack':'A','rst':'R','fin':'F'}.get(type,'')
+
+    def scanPort(scanningPort):
+        state = 'UNKNOWN'
+        ans = None
+        try:
+            ans, unans = sr(IP(dst=host)/TCP(dport=scanningPort, flags=flag),timeout=2, verbose=0)
+        except:
+            state = 'UNKNOWN'
+        if scanningPort in common_ports_dict:
+            service = common_ports_dict[scanningPort]
+        elif scanningPort in wellKnownPorts:
+            service = wellKnownPorts[scanningPort]
+        else:
+            service = 'TCP/UDP'
+
+        if ans:
+            for snd, rcv in ans:
+                tcp = rcv.getlayer(TCP)
+                if tcp:
+                    if type == 'syn':
+                        if tcp.flags == 0x12:
+                            state = 'OPEN'
+                            sr(IP(dst=host) / TCP(dport=scanningPort, flags="R"), timeout=1, verbose=0)
+                        elif tcp.flags == 0x14:
+                            state = 'CLOSED'
+
+                    elif type == 'ack':
+                        if tcp.flags == 0x14:
+                            state = "UNFILTERED"
+
+                    elif type == 'rst':
+                        if tcp.flags == 0x14:
+                            state = "CLOSED"
+                        else:
+                            state = "OPEN|FILTERED"
+
+                    elif type == 'fin':
+                        if tcp.flags == 0x14:
+                            state = "CLOSED"
+                        else:
+                            state = "OPEN|FILTERED"
+
+        else:
+            match type:
+                case 'syn':state = 'FILTERED'
+                case 'ack':state = 'FILTERED'
+                case 'rst':state = 'OPEN|FILTERED'
+                case 'fin':state = 'OPEN|FILTERED'
+
+        global portScanned
+        with threadLock:
+            portScanned += 1
+            progress.update(taskID, completed=portScanned)
+
+        # Always return 4 items: port, service, state, banner
+        return [scanningPort, service, state]
+
+    with ThreadPoolExecutor(max_workers=20) as executor:
+        futures = [executor.submit(scanPort, p) for p in ports]
+        for fut in futures:
+            results.append(fut.result())
+    return results
 
 
 
-def getPorts(portMode, numberOfHosts, start, end, threads, inputPorts = None):
+def getPorts(portMode, numberOfHosts, start, end, threads,scanType, inputPorts = None):
     '''
     :param inputPorts:
     :param portMode: common, range, all
@@ -681,7 +747,7 @@ def getPorts(portMode, numberOfHosts, start, end, threads, inputPorts = None):
             case _:
                 listOfPorts =list(range(1, 1025))
 
-        if numberOfHosts == 1:
+        if numberOfHosts == 1 and scanType == 'connect':
             temp = [[] for i in range(threads)]
             for i in range(len(listOfPorts)):
                 temp[i % threads].append(listOfPorts[i])
@@ -1169,8 +1235,7 @@ def main():
                 hosts.append(host)
     else:
         hosts = flatHosts
-    ports = getPorts(args.portMode, len(hosts), args.start, args.end, args.threads, args.port)
-
+    ports = getPorts(args.portMode, len(hosts), args.start, args.end, args.threads,args.scanType, args.port)
     validate_ports(ports if isinstance(ports, list) else ports[0], args)
 
     groupedResults = [[] for i in range(args.threads)]
@@ -1195,7 +1260,7 @@ def main():
             hostChunks[i % threadCount].append(hosts[i])
 
     total_ports = len(hosts) * len(ports)
-
+    final = {host: [] for host in hosts}
     with Progress(
             TextColumn("[bold blue]{task.description}"),
             BarColumn(),
@@ -1206,66 +1271,84 @@ def main():
         # Create one task for the whole scan
         taskID = progress.add_task("Scanning all hosts", total=total_ports)
 
-        for t in range(threadCount):
-            if len(hosts) == 1:
-                thread = threading.Thread(target=busyBeeIFOneHost, args=(
-                hosts, ports[t], args.delay, groupedResults, t, args.servicescan, progress, taskID))
-                threads.append(thread)
 
-            else:
-                thread = threading.Thread(target=busybeeIFMultipleHosts, args=(
-                hostChunks[t], ports, args.delay, groupedResults, t, args.servicescan, progress, taskID))
-                threads.append(thread)
 
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
+        if args.scanType == 'connect':
+            for t in range(threadCount):
+                if len(hosts) == 1:
+                    thread = threading.Thread(target=busyBeeIFOneHost, args=(
+                    hosts, ports[t], args.delay, groupedResults, t, args.servicescan, progress, taskID))
+                    threads.append(thread)
 
+                else:
+                    thread = threading.Thread(target=busybeeIFMultipleHosts, args=(
+                    hostChunks[t], ports, args.delay, groupedResults, t, args.servicescan, progress, taskID))
+                    threads.append(thread)
+
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+        elif args.scanType in ['syn','ack','fin','rst']:
+            if isinstance(hosts, list):
+                for host in hosts:
+                    final[host] = scapyScan(host, ports, args.scanType, progress, taskID)
+            elif isinstance(hosts, str):
+                final[hosts] = scapyScan(hosts, ports, args.scanType, progress, taskID)
 
     scannedHosts = set()
     for group in groupedResults:
         for result in group:
             scannedHosts.add(result.get('host'))
+    if args.scanType == 'connect':
+        final = output(scannedHosts, groupedResults, args.servicescan)
 
-    final = output(scannedHosts, groupedResults, args.servicescan)
+    for host in final.keys():
+        sorted_results = sorted(final[host], key=lambda x: x[0])
+        os = osDetection(sorted_results, host)
+        console.print(f"\n [bold purple]Host:[/bold purple] [bold blue]{host} -> OS: {os}[/bold blue]")
 
-    if not args.servicescan:
+        if not sorted_results:
+            continue
+        num_cols = len(sorted_results[0])
+        headers = ["Port", "Service", "State"]
+        if num_cols > 3:
+            headers.extend([f"Col{i}" for i in range(4, num_cols + 1)])
+            headers[3] = "Banner"
 
-        for host in final.keys():
-            sorted_results = sorted(final[host], key=lambda x: x[0])
-            os = osDetection(sorted_results, host)
-            console.print(f"\n [bold purple]Host:[/bold purple] [bold blue]{host} -> OS: {os}[/bold blue]")
-            table = Table(show_header=True, header_style="bold blue")
-            table.add_column("Port", justify="right")
-            table.add_column("Service", justify="left")
-            table.add_column("State", justify="right")
-            for port, service, state in sorted_results:
-                if state == 'OPEN' and (args.display == 'all' or args.display == 'open'):
-                    table.add_row(str(port), service, f"[bold green]{state}[/bold green]")
-                elif state == 'CLOSED' and (args.display == 'all' or args.display == 'closed'):
-                    table.add_row(str(port), service, f"[bold red]{state}[/bold red]")
-            console.print(table)
-    else:
-        for host in final.keys():
-            sorted_results = sorted(final[host], key=lambda x: x[0])
-            os = osDetection(sorted_results, host)
-            console.print(f"\n [bold purple]Host:[/bold purple] [bold blue]{host} -> OS: {os}[/bold blue]")
-            table = Table(show_header=True, header_style="bold blue")
-            table.add_column("Port", justify="right")
-            table.add_column("Service", justify="left")
-            table.add_column("State", justify="right")
-            table.add_column("Banner", justify="right")
-            seen = set()
+        table = Table(show_header=True, header_style="bold blue")
+        for h in headers:
+            table.add_column(h, justify="right" if h in ["Port", "State"] else "left")
 
-            for port, service, state, banner in sorted_results:
-                if port not in seen:
-                    if state == 'OPEN' and (args.display == 'all' or args.display == 'open'):
-                         table.add_row(str(port), service, f"[bold green]{state}[/bold green]", banner)
-                    elif state == 'CLOSED' and (args.display == 'all' or args.display == 'closed'):
-                        table.add_row(str(port), service, f"[bold red]{state}[/bold red]", banner)
-                    seen.add(port)
-            console.print(table)
+        seen = set()
+        for row in sorted_results:
+            port = row[0]
+            if port in seen:
+                continue
+            seen.add(port)
+
+            # Format state with colors
+            state = row[2]
+            if state == 'OPEN' and (args.display in ['all', 'open']):
+                row[2] = f"[bold green]{state}[/bold green]"
+                table.add_row(*[str(item) if item is not None else "" for item in row])
+            elif state == 'CLOSED' and (args.display in ['all', 'closed']):
+                row[2] = f"[bold red]{state}[/bold red]"
+                table.add_row(*[str(item) if item is not None else "" for item in row])
+            elif state == 'FILTERED' and (args.display in ['all']):
+                row[2] = f"[bold yellow]{state}[/bold yellow]"
+                table.add_row(*[str(item) if item is not None else "" for item in row])
+            elif state == 'UNFILTERED' and (args.display in ['all']):
+                row[2] = f"[bold green]{state}[/bold green]"
+                table.add_row(*[str(item) if item is not None else "" for item in row])
+            elif state == 'OPEN|FILTERED' and (args.display in ['all']):
+                row[2] = f"[bold green]{state}[/bold green]"
+                table.add_row(*[str(item) if item is not None else "" for item in row])
+
+
+
+
+        console.print(table)
 
     validate_open_ports(final, args)
 
