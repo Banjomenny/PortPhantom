@@ -1,12 +1,5 @@
-import argparse
-import ipaddress
-import socket
-import sys
-import threading
-import time
-import os
-from enum import Enum
 
+import ipaddress
 import pyfiglet
 from rich.align import Align
 from rich.console import Console
@@ -14,6 +7,8 @@ from rich.panel import Panel
 from rich.progress import Progress, TextColumn, BarColumn, TimeRemainingColumn
 from rich.table import Table
 from rich.text import Text
+from scapy.all import *
+from scapy.layers.inet import IP, ICMP
 
 threadLock = threading.Lock()
 portScanned = 0
@@ -295,7 +290,7 @@ def parse_arguments():
     '''
     #allows for nice CLI argument parsing
     parser = argparse.ArgumentParser(description='network scanner',usage='scans a given network for open ports')
-    parser.add_argument("-a", "--address", action='store', dest='address', required=True,help="you can use CIDR notation or a something like 1.1.1.1-100. or specify single host")
+    parser.add_argument("-a", "--address", action='store', dest='address', required=False,help="you can use CIDR notation or a something like 1.1.1.1-100. or specify single host")
     parser.add_argument('--mode', action='store',dest='portMode',choices=['common', 'range', 'all', 'single','wellKnown', 'web', 'database', 'remoteAccess', 'fileShare', 'mail'], required=False, default='common',help='common is 1-1024, range you specify --startport and --endport and all is 1-65535')
     parser.add_argument('--start-port', type=int, action='store', dest='start', required=False, default=1,help='start port of range')
     parser.add_argument('--end-port', type=int, action='store', dest='end', required=False, default=1024,help='end port of range')
@@ -360,8 +355,9 @@ def getIPaddresses(address, threads):
             sys.exit("Invalid Host")
 #JL Edit V1
 
+
 def scan_port_with_progress(target, port, ifServiceScan, progress, taskID):
-    result = scan_port(target, port, ifServiceScan)
+    result = scan_port_connect(target, port, ifServiceScan)
     global portScanned
     with threadLock:
         portScanned += 1
@@ -370,7 +366,7 @@ def scan_port_with_progress(target, port, ifServiceScan, progress, taskID):
     return result
 
 
-def scan_port(target, port, ifServiceScan):
+def scan_port_connect(target, port, ifServiceScan):
     '''
     :param target: target ip address
     :param port: port to scan
@@ -402,8 +398,6 @@ def scan_port(target, port, ifServiceScan):
                         while True:
                             try:
                                 data = sock.recv(4096)
-
-
                                 if not data:
                                     break
                                 response.append(data.decode(errors='ignore'))
@@ -601,6 +595,55 @@ def outputFile(timestamp, finalOutput, args):
         save_as_txt(fileName, finalOutput, args)
     
     print(f"\n[+] Results saved to: {fileName}")
+
+def osDetection(hostOutput, host):
+    linux_distros = ["Ubuntu", "Debian", "Red Hat", "CentOS", "FreeBSD", "Raspbian"]
+    microsoft_keywords = ['Microsoft', 'Windows']
+    apple_keywords = ['Darwin', 'Apple']
+    OS = ''
+
+    try:
+        for port, service, state, banner in hostOutput:
+
+            for distro in linux_distros:
+                if distro.lower() in banner.lower():
+                    print(distro.lower(), banner.lower())
+                    return f"Linux ({distro})"
+
+            for keyword in microsoft_keywords:
+                if keyword.lower() in banner.lower():
+                    return "Windows"
+
+            for keyword in apple_keywords:
+                if keyword.lower() in banner.lower():
+                    return "MacOS"
+    except Exception as e:
+        print("Error parsing banners:", e)
+        OS = ''
+
+    packet = IP(dst=host)/ICMP()
+    reply = sr1(packet, timeout=2, verbose=0)
+
+    if reply is None:
+        return OS if OS else "No response"
+
+    ttl = reply.ttl
+    if OS == '':
+        if ttl >= 255:
+            OS = 'likely Cisco/network device'
+        elif ttl >= 128:
+            OS = 'likely Windows'
+        elif ttl >= 64:
+            OS = 'likely Linux/macOS/Unix'
+        else:
+            OS = f'Unknown OS (TTL={ttl})'
+
+    return OS
+
+
+
+
+
 
 def getPorts(portMode, numberOfHosts, start, end, threads, inputPorts = None):
     '''
@@ -1084,10 +1127,10 @@ def security_scan_report(finalOutput, args):
 
 #UnFinishedFUNC
 def main():
+
     args = parse_arguments()
     scanStart = time.time()
-    try: float(args.delay)
-    except ValueError: sys.exit('wrong value for delay: needs to be float')
+
 
     try: int(args.threads)
     except ValueError: sys.exit('wrong value for threads: needs to be int')
@@ -1190,12 +1233,13 @@ def main():
     if not args.servicescan:
 
         for host in final.keys():
-            console.print(f"\n [bold purple]Host:[/bold purple] [bold blue]{host}[/bold blue]")
+            sorted_results = sorted(final[host], key=lambda x: x[0])
+            os = osDetection(sorted_results, host)
+            console.print(f"\n [bold purple]Host:[/bold purple] [bold blue]{host} -> OS: {os}[/bold blue]")
             table = Table(show_header=True, header_style="bold blue")
             table.add_column("Port", justify="right")
             table.add_column("Service", justify="left")
             table.add_column("State", justify="right")
-            sorted_results = sorted(final[host], key=lambda x: x[0])
             for port, service, state in sorted_results:
                 if state == 'OPEN' and (args.display == 'all' or args.display == 'open'):
                     table.add_row(str(port), service, f"[bold green]{state}[/bold green]")
@@ -1204,14 +1248,16 @@ def main():
             console.print(table)
     else:
         for host in final.keys():
-            console.print(f"\n [bold purple]Host:[/bold purple] [bold blue]{host}[/bold blue]")
+            sorted_results = sorted(final[host], key=lambda x: x[0])
+            os = osDetection(sorted_results, host)
+            console.print(f"\n [bold purple]Host:[/bold purple] [bold blue]{host} -> OS: {os}[/bold blue]")
             table = Table(show_header=True, header_style="bold blue")
             table.add_column("Port", justify="right")
             table.add_column("Service", justify="left")
             table.add_column("State", justify="right")
             table.add_column("Banner", justify="right")
             seen = set()
-            sorted_results = sorted(final[host], key=lambda x: x[0])
+
             for port, service, state, banner in sorted_results:
                 if port not in seen:
                     if state == 'OPEN' and (args.display == 'all' or args.display == 'open'):
