@@ -350,7 +350,7 @@ def textual_interface():
     )
 
     args.threads = IntPrompt.ask("[cyan]Number of threads[/cyan]", default=1)
-    args.delay = float(Prompt.ask("[cyan]Delay between probes[/cyan]", default=0.1))
+    args.delay = float(Prompt.ask("[cyan]Delay between probes[/cyan]", default='0.1'))
 
     args.display = Prompt.ask(
         "[cyan]Display mode[/cyan]",
