@@ -306,15 +306,18 @@ def textual_interface():
     port_table.add_row("wellknown", "Ports 1-1024")
     port_table.add_row("range", "Custom start/end")
     port_table.add_row("web", "common web ports")
-    port_table.add_row()
-    port_table.add_row("all", "Ports 1-65535")
+    port_table.add_row("database", "common database ports")
+    port_table.add_row("fileShare", "common filesharing ports")
+    port_table.add_row("mail", "common ports used for mail")
+    port_table.add_row("remoteAccess", "ports assoicated with remote access")
+    port_table.add_row("common", "most common ports")
     port_table.add_row("single", "Specify one port or list")
     console.print(port_table)
 
 
     args.portMode = Prompt.ask(
         "[cyan]Choose port mode[/cyan]",
-        choices=["common", "range", "all", "single, web, "],
+        choices=['common', 'range', 'all', 'single','wellKnown', 'web', 'database', 'remoteAccess', 'fileShare', 'mail'],
         default="common"
     )
 
