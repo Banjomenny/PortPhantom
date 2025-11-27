@@ -1,10 +1,12 @@
 
 import ipaddress
+import sys
 from concurrent.futures import ProcessPoolExecutor
 
 import pyfiglet
 from rich.align import Align
 from rich.console import Console
+from rich.prompt import Prompt, IntPrompt, Confirm
 from rich.panel import Panel
 from rich.progress import Progress, TextColumn, BarColumn, TimeRemainingColumn
 from rich.table import Table
@@ -285,6 +287,90 @@ def checkHostStatus(hostname):
             return 1
     return response
 
+def textual_interface():
+    parser = parse_arguments()
+    args = parser.parse_args([])
+    args.start = 1
+    args.end = 1024
+    console = Console()
+    console.rule("[bold blue]Network Scanner Setup[/bold blue]")
+
+    args.address = Prompt.ask(
+        "[cyan]Target address[/cyan] (CIDR, range, or single host)",
+        default="127.0.0.1"
+    )
+
+    port_table = Table(title="Port Modes")
+    port_table.add_column("Option", style="magenta")
+    port_table.add_column("Description", style="green")
+    port_table.add_row("wellknown", "Ports 1-1024")
+    port_table.add_row("range", "Custom start/end")
+    port_table.add_row("web", "common web ports")
+    port_table.add_row()
+    port_table.add_row("all", "Ports 1-65535")
+    port_table.add_row("single", "Specify one port or list")
+    console.print(port_table)
+
+
+    args.portMode = Prompt.ask(
+        "[cyan]Choose port mode[/cyan]",
+        choices=["common", "range", "all", "single, web, "],
+        default="common"
+    )
+
+    if args.portMode == "range":
+        args.start = IntPrompt.ask("[yellow]Enter start port[/yellow]", default=1)
+        args.end = IntPrompt.ask("[yellow]Enter end port[/yellow]", default=1024)
+    elif args.portMode == "single":
+        args.port = Prompt.ask("[yellow]Enter port(s)[/yellow] (comma separated)")
+
+    scan_map = {
+        "syn": "SYN Scan (-sS)",
+        "ack": "ACK Scan (-sA)",
+        "rst": "RST Scan (-sR)",
+        "fin": "FIN Scan (-sF)",
+        "connect": "Connect Scan (-sC)",
+        "arpping": "ARP Ping (-aP)"
+    }
+
+    scan_table = Table(title="Scan Types")
+    scan_table.add_column("Type", style="magenta")
+    scan_table.add_column("Description", style="green")
+    for key, desc in scan_map.items():
+        scan_table.add_row(key, desc)
+    console.print(scan_table)
+
+    args.scanType = Prompt.ask(
+        "[cyan]Choose scan type[/cyan]",
+        choices=list(scan_map.keys()),
+        default="connect"
+    )
+
+    args.threads = IntPrompt.ask("[cyan]Number of threads[/cyan]", default=1)
+    args.delay = float(Prompt.ask("[cyan]Delay between probes[/cyan]", default=0.1))
+
+    args.display = Prompt.ask(
+        "[cyan]Display mode[/cyan]",
+        choices=["all", "open", "closed"],
+        default="all"
+    )
+
+    args.output_file = Prompt.ask("[cyan]Output filename[/cyan] (optional)", default="")
+    args.output_format = Prompt.ask(
+        "[cyan]Output format[/cyan]",
+        choices=["txt", "csv"],
+        default="txt"
+    )
+
+    if args.scanType is 'connect':
+        args.servicescan = Confirm.ask("[cyan]Enable service scan?[/cyan]", default=False)
+    args.show_vulns = Confirm.ask("[cyan]Show vulnerabilities?[/cyan]", default=False)
+    args.do_pings = Confirm.ask("[cyan]Do ping sweep?[/cyan]", default=False)
+
+    console.rule("[bold green]Final Configuration[/bold green]")
+
+    return args
+
 
 def parse_arguments():
     '''
@@ -295,23 +381,34 @@ def parse_arguments():
 
 
     #allows for nice CLI argument parsing
+
+
     parser = argparse.ArgumentParser(description='network scanner',usage='scans a given network for open ports')
+    groupPort = parser.add_mutually_exclusive_group(required=False)
+    groupPort.add_argument('--portList', action='store',dest='portMode',choices=['common', 'range', 'all', 'single','wellKnown', 'web', 'database', 'remoteAccess', 'fileShare', 'mail'], required=False, default='common',help='common is 1-1024, range you specify --startport and --endport and all is 1-65535')
+    groupPort.add_argument('-p','--port', action='store', dest='port', required=False, default=None,help='choose the port you want or a list like 1,2,3,4,5,6,7')
+
+    groupScan = parser.add_mutually_exclusive_group(required=False)
+    groupScan.add_argument('-sS', action='store_const',dest='scanType',const='syn',help='synscan')
+    groupScan.add_argument('-sA', action='store_const',dest='scanType',const='ack',help='ack scan')
+    groupScan.add_argument('-sR', action='store_const',dest='scanType',const='rst',help='rst scan')
+    groupScan.add_argument('-sF', action='store_const',dest='scanType',const='fin',help='fin scan')
+    groupScan.add_argument('-sC', action='store_const',dest='scanType',const='connect',help='connect scan \\ vannila scan')
+    groupScan.add_argument('-aP', action='store_const',dest='scanType',const='arpping',help='arp ping')
+
 
     parser.add_argument("-a", "--address", action='store', dest='address', required=False,help="you can use CIDR notation or a something like 1.1.1.1-100. or specify single host")
-    parser.add_argument('--portList', action='store',dest='portMode',choices=['common', 'range', 'all', 'single','wellKnown', 'web', 'database', 'remoteAccess', 'fileShare', 'mail'], required=False, default='common',help='common is 1-1024, range you specify --startport and --endport and all is 1-65535')
-    parser.add_argument('--start-port', type=int, action='store', dest='start', required=False, default=1,help='start port of range')
-    parser.add_argument('--scantype', action='store', dest='scanType',choices=['connect','syn','ack','rst','fin','arpping'], required=False, default='connect', help='connect: Connect Scan, syn: synScan, ack: ackScan, rst: resetScan, fin: finScan')
-    parser.add_argument('--end-port', type=int, action='store', dest='end', required=False, default=1024,help='end port of range')
     parser.add_argument('-t', '--threads', type=int, action='store', dest='threads', required=False, default=1,help='number of threads')
     parser.add_argument('-d', '--delay', type=float, action='store', dest='delay', required=False, default=0.1,help='delay in seconds')
     parser.add_argument('--display', action='store',choices=['all','open','closed'], dest='display', required=False, default='all', help='chose what ports to be diplayed, all, open, closed')
-    parser.add_argument('-p','--port', action='store', dest='port', required=False, default=None,help='choose the port you want or a list like 1,2,3,4,5,6,7')
-    parser.add_argument('--output-to-file', type=str, dest='output_file', required=False, default=None, help='output filename (e.g., results.txt or results.csv)') #JL output
-    parser.add_argument('--output-format', choices=['txt', 'csv'], default='txt', help='output format: txt or csv') #JL output
-    parser.add_argument('--servicescan', action='store_true', dest='servicescan', required=False, default=False, help='service scan')
+    parser.add_argument('-out','--output-to-file', type=str, dest='output_file', required=False, default=None, help='output filename (e.g., results.txt or results.csv)') #JL output
+    parser.add_argument('-f','--output-format', choices=['txt', 'csv'], default='txt', help='output format: txt or csv') #JL output
+    parser.add_argument('-sv','--servicescan', action='store_true', dest='servicescan', required=False, default=False, help='service scan')
     parser.add_argument('--show-vulns', action='store_true', dest='show_vulns', required=False, default=False,help='show vulnerabilities')
-    parser.add_argument('--do-pings', action='store_true', dest='do_pings', required=False, default=False,help='ping service')
-    return parser.parse_args()
+    parser.add_argument('-ps','--pingsweep', action='store_true', dest='do_pings', required=False, default=False,help='do a ping sweep to only scan up hosts')
+
+
+    return parser
 
 def parsePort(input):
     portsstr = None
@@ -615,7 +712,6 @@ def osDetection(hostOutput, host):
 
             for distro in linux_distros:
                 if distro.lower() in banner.lower():
-                    print(distro.lower(), banner.lower())
                     return f"Linux ({distro})"
 
             for keyword in microsoft_keywords:
@@ -630,7 +726,6 @@ def osDetection(hostOutput, host):
 
     packet = IP(dst=host)/ICMP()
     reply = sr1(packet, timeout=2, verbose=0)
-    print("TTL reply:", reply.ttl if reply else None)
     if reply is None:
         return OS if OS else "No response"
 
@@ -1180,8 +1275,24 @@ def security_scan_report(finalOutput, args):
 
 #UnFinishedFUNC
 def main():
+    if len(sys.argv) == 1:
+        args = textual_interface()
+    else:
+        args = parser.parse_args()
+        if args.portMode == 'range':
+            try:
+                if args.start is None:
+                    args.start = int(input("Enter start port: "))
+                    if args.start < 1 or args.start > 65535:
+                        raise ValueError
+                if args.end is None:
+                    args.end = int(input("Enter end port: "))
+                    if args.start < 1 or args.start > 65535:
+                        raise ValueError
+            except ValueError:
+                print("Please enter a valid port number")
 
-    args = parse_arguments()
+
     scanStart = time.time()
 
 
