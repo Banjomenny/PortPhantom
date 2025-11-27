@@ -1,6 +1,6 @@
 
 import ipaddress
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor
 
 import pyfiglet
 from rich.align import Align
@@ -290,8 +290,13 @@ def parse_arguments():
     '''
     :return: arguments
     '''
+
+
+
+
     #allows for nice CLI argument parsing
     parser = argparse.ArgumentParser(description='network scanner',usage='scans a given network for open ports')
+
     parser.add_argument("-a", "--address", action='store', dest='address', required=False,help="you can use CIDR notation or a something like 1.1.1.1-100. or specify single host")
     parser.add_argument('--portList', action='store',dest='portMode',choices=['common', 'range', 'all', 'single','wellKnown', 'web', 'database', 'remoteAccess', 'fileShare', 'mail'], required=False, default='common',help='common is 1-1024, range you specify --startport and --endport and all is 1-65535')
     parser.add_argument('--start-port', type=int, action='store', dest='start', required=False, default=1,help='start port of range')
@@ -641,72 +646,54 @@ def osDetection(hostOutput, host):
             OS = f'Unknown OS'
     return OS
 
-
-
-def scapyScan(host, ports, type, progress, taskID):
-    results = []
-    flag = {'syn':'S','ack':'A','rst':'R','fin':'F'}.get(type,'')
-
-    def scanPort(scanningPort):
+def scanPort(host, scanningPort, flag, scanType):
         state = 'UNKNOWN'
-        ans = None
+        service = common_ports_dict.get(scanningPort, wellKnownPorts.get(scanningPort, 'TCP/UDP'))
+
         try:
-            ans, unans = sr(IP(dst=host)/TCP(dport=scanningPort, flags=flag),timeout=2, verbose=0)
-        except:
-            state = 'UNKNOWN'
-        if scanningPort in common_ports_dict:
-            service = common_ports_dict[scanningPort]
-        elif scanningPort in wellKnownPorts:
-            service = wellKnownPorts[scanningPort]
-        else:
-            service = 'TCP/UDP'
+            ans, unans = sr(IP(dst=host) / TCP(dport=scanningPort, flags=flag), timeout=2, verbose=0)
+        except Exception:
+            return [scanningPort, service, state]
 
         if ans:
             for snd, rcv in ans:
                 tcp = rcv.getlayer(TCP)
                 if tcp:
-                    if type == 'syn':
+                    if scanType == 'syn':
                         if tcp.flags == 0x12:
                             state = 'OPEN'
                             sr(IP(dst=host) / TCP(dport=scanningPort, flags="R"), timeout=1, verbose=0)
                         elif tcp.flags == 0x14:
                             state = 'CLOSED'
-
-                    elif type == 'ack':
+                    elif scanType == 'ack':
                         if tcp.flags == 0x14:
                             state = "UNFILTERED"
-
-                    elif type == 'rst':
-                        if tcp.flags == 0x14:
-                            state = "CLOSED"
-                        else:
-                            state = "OPEN|FILTERED"
-
-                    elif type == 'fin':
-                        if tcp.flags == 0x14:
-                            state = "CLOSED"
-                        else:
-                            state = "OPEN|FILTERED"
-
+                    elif scanType == 'rst':
+                        state = "CLOSED" if tcp.flags == 0x14 else "OPEN|FILTERED"
+                    elif scanType == 'fin':
+                        state = "CLOSED" if tcp.flags == 0x14 else "OPEN|FILTERED"
         else:
-            match type:
-                case 'syn':state = 'FILTERED'
-                case 'ack':state = 'FILTERED'
-                case 'rst':state = 'OPEN|FILTERED'
-                case 'fin':state = 'OPEN|FILTERED'
+            match scanType:
+                case 'syn' | 'ack':
+                    state = 'FILTERED'
+                case 'rst' | 'fin':
+                    state = 'OPEN|FILTERED'
 
-        global portScanned
-        with threadLock:
-            portScanned += 1
-            progress.update(taskID, completed=portScanned)
-
-        # Always return 4 items: port, service, state, banner
         return [scanningPort, service, state]
 
-    with ThreadPoolExecutor(max_workers=20) as executor:
-        futures = [executor.submit(scanPort, p) for p in ports]
+
+def scapyScan(host, ports, scanType, progress, taskID):
+    results = []
+    flag = {'syn':'S','ack':'A','rst':'R','fin':'F'}.get(scanType, '')
+
+    with ProcessPoolExecutor(max_workers=20) as executor:
+        futures = [executor.submit(scanPort, host, p, flag, scanType) for p in ports]
         for fut in futures:
-            results.append(fut.result())
+            result = fut.result()
+            results.append(result)
+            # update progress here in parent
+            progress.update(taskID, advance=1)
+
     return results
 
 
@@ -1357,4 +1344,6 @@ def main():
     if args.output_file or args.output_format != 'txt':
         outputFile(scanStart, final, args)
 
-main()
+if __name__ == "__main__":
+    main()
+
