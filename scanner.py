@@ -1,7 +1,37 @@
+"""
+Network Port Scanner - Final Project
 
+Authors: Benjamin and Joshua (Team BenNjosh)
+Course: INFO-3128 Scripting for Security
+Date: November 27th, 2025
+
+Multi threaded port scanner with service detection, OS fingerprinting,
+and vulnerability assessment. Supports SYN/ACK/FIN/RST/Connect scans.
+
+Dependencies: Python 3.10, scapy, rich, pyfiglet
+Install Command: pip install scapy rich pyfiglet
+
+Usage:
+    python scanner.py -h
+    python scanner.py -a 192.168.1.1 -sS --portList common -sv
+
+Features:
+    - Connect and Scapy-based scans
+    - Optional ping sweep and TUI wizard
+    - TXT/CSV reporting with basic vulnerability hints
+"""
+
+
+# Core networking, concurrency, and CLI libraries
 import ipaddress
 import sys
-from concurrent.futures import ProcessPoolExecutor
+import os      
+import time     
+import socket    
+import threading 
+import argparse  
+from enum import Enum  
+from concurrent.futures import ProcessPoolExecutor 
 
 import pyfiglet
 from rich.align import Align
@@ -14,12 +44,13 @@ from rich.text import Text
 from scapy.all import *
 from scapy.layers.inet import IP, ICMP, TCP
 
-threadLock = threading.Lock()
+# Task5: Simultaneous scanning – shared state for threaded progress
+threadLock = threading.Lock() # Prevent race conditions in progress updates
 portScanned = 0
 
 
 
-#list of common ports to check against
+# Task9 "Service Detection - Common Ports Dictionary"
 common_ports_dict = {
     20: "FTP Data",
     21: "FTP Control",
@@ -70,7 +101,7 @@ common_ports_dict = {
     10000: "Webmin",
     27017: "MongoDB"
 }
-
+#Task9 "Services running on specific ports"
 wellKnownPorts = {
     0: "Reserved",
     1: "TCPMUX",
@@ -237,7 +268,7 @@ wellKnownPorts = {
 
 
 
-
+# Task7: Output customization
 class Color(Enum):
     BLACK = 0
     RED = 1
@@ -252,9 +283,7 @@ class Color(Enum):
     BOLDWHITE = 10
 def stringInColor(color,text ):
     '''
-    :param color:  Color enum class value of the color you want
-    :param text: the selected text you wanna make colorful
-    :return: the string that makes the text colorful
+    Wrap text in ANSI colour codes for terminal output.
     '''
     os.system("color")
     RESET = '\033[0m'
@@ -271,8 +300,9 @@ def stringInColor(color,text ):
      9: "\033[1;31m",
      10: "\033[1;37m",
     }
-    return COLORS[color.value] + text + RESET
+    return COLORS[color.value] + text + RESET # Wrap text with color codes
 
+#EXTRA "Checks if host is online"
 def checkHostStatus(hostname):
     platform = os.name
     response = ""
@@ -287,6 +317,7 @@ def checkHostStatus(hostname):
             return 1
     return response
 
+#EXTRA "Interactive text based UI"
 def textual_interface():
     parser = parse_arguments()
     args = parser.parse_args([])
@@ -365,7 +396,7 @@ def textual_interface():
         default="txt"
     )
 
-    if args.scanType is 'connect':
+    if args.scanType == 'connect':
         args.servicescan = Confirm.ask("[cyan]Enable service scan?[/cyan]", default=False)
     args.show_vulns = Confirm.ask("[cyan]Show vulnerabilities?[/cyan]", default=False)
     args.do_pings = Confirm.ask("[cyan]Do ping sweep?[/cyan]", default=False)
@@ -374,45 +405,180 @@ def textual_interface():
 
     return args
 
-
+# Task4: CLI argument parser – build network scanner options
 def parse_arguments():
-    '''
-    :return: arguments
-    '''
-
-
-
-
+    """
+    Build and return the main argparse.ArgumentParser instance.
+    """
     #allows for nice CLI argument parsing
-
-
-    parser = argparse.ArgumentParser(description='network scanner',usage='scans a given network for open ports')
+    parser = argparse.ArgumentParser(
+        description='network scanner',
+        usage='scans a given network for open ports'
+    )
+    parser.add_argument(
+        '--startport', 
+        type=int, 
+        action='store', 
+        dest='start', # CRITICAL: Map to 'start' attribute
+        required=False, 
+        default=1, # Provide a default value
+        help='The starting port number for a range scan (e.g., 1)'
+    )
+    parser.add_argument(
+        '--endport', 
+        type=int, 
+        action='store', 
+        dest='end', # CRITICAL: Map to 'end' attribute
+        required=False, 
+        default=1024, # Provide a default value
+        help='The ending port number for a range scan (e.g., 1024)'
+    )
+    # Port selection options
     groupPort = parser.add_mutually_exclusive_group(required=False)
-    groupPort.add_argument('--portList', action='store',dest='portMode',choices=['common', 'range', 'all', 'single','wellKnown', 'web', 'database', 'remoteAccess', 'fileShare', 'mail'], required=False, default='common',help='common is 1-1024, range you specify --startport and --endport and all is 1-65535')
-    groupPort.add_argument('-p','--port', action='store', dest='port', required=False, default=None,help='choose the port you want or a list like 1,2,3,4,5,6,7')
-
+    groupPort.add_argument(
+        '--portList', 
+        action='store',
+        dest='portMode',
+        choices=['common', 'range', 'all', 'single', 'wellKnown', 'web', 
+                 'database', 'remoteAccess', 'fileShare', 'mail'], 
+        required=False, 
+        default='common',
+        help='common is 1-1024, range you specify --startport and --endport and all is 1-65535'
+    )
+    groupPort.add_argument(
+        '-p', '--port', 
+        action='store', 
+        dest='port', 
+        required=False, 
+        default=None,
+        help='choose the port you want or a list like 1,2,3,4,5,6,7'
+    )
+    # Scan type options
     groupScan = parser.add_mutually_exclusive_group(required=False)
-    groupScan.add_argument('-sS', action='store_const',dest='scanType',const='syn',help='synscan')
-    groupScan.add_argument('-sA', action='store_const',dest='scanType',const='ack',help='ack scan')
-    groupScan.add_argument('-sR', action='store_const',dest='scanType',const='rst',help='rst scan')
-    groupScan.add_argument('-sF', action='store_const',dest='scanType',const='fin',help='fin scan')
-    groupScan.add_argument('-sC', action='store_const',dest='scanType',const='connect',help='connect scan \\ vannila scan')
-    groupScan.add_argument('-aP', action='store_const',dest='scanType',const='arpping',help='arp ping')
+    groupScan.add_argument(
+        '-sS', 
+        action='store_const',
+        dest='scanType',
+        const='syn',
+        help='synscan'
+    )
+    groupScan.add_argument(
+        '-sA', 
+        action='store_const',
+        dest='scanType',
+        const='ack',
+        help='ack scan'
+    )
+    groupScan.add_argument(
+        '-sR', 
+        action='store_const',
+        dest='scanType',
+        const='rst',
+        help='rst scan'
+    )
+    groupScan.add_argument(
+        '-sF', 
+        action='store_const',
+        dest='scanType',
+        const='fin',
+        help='fin scan'
+    )
+    groupScan.add_argument(
+        '-sC', 
+        action='store_const',
+        dest='scanType',
+        const='connect',
+        help='connect scan \\ vannila scan'
+    )
+    groupScan.add_argument(
+        '-aP', 
+        action='store_const',
+        dest='scanType',
+        const='arpping',
+        help='arp ping'
+    )
+    
+    parser.add_argument(
+    "-a", "--address", 
+    action='store', 
+    dest='address', 
+    required=False,
+    default=None,
+    help="Target IP address or hostname (required for CLI mode)"
+    )
 
-
-    parser.add_argument("-a", "--address", action='store', dest='address', required=False,help="you can use CIDR notation or a something like 1.1.1.1-100. or specify single host")
-    parser.add_argument('-t', '--threads', type=int, action='store', dest='threads', required=False, default=1,help='number of threads')
-    parser.add_argument('-d', '--delay', type=float, action='store', dest='delay', required=False, default=0.1,help='delay in seconds')
-    parser.add_argument('--display', action='store',choices=['all','open','closed'], dest='display', required=False, default='all', help='chose what ports to be diplayed, all, open, closed')
-    parser.add_argument('-out','--output-to-file', type=str, dest='output_file', required=False, default=None, help='output filename (e.g., results.txt or results.csv)') #JL output
-    parser.add_argument('-f','--output-format', choices=['txt', 'csv'], default='txt', help='output format: txt or csv') #JL output
-    parser.add_argument('-sv','--servicescan', action='store_true', dest='servicescan', required=False, default=False, help='service scan')
-    parser.add_argument('--show-vulns', action='store_true', dest='show_vulns', required=False, default=False,help='show vulnerabilities')
-    parser.add_argument('-ps','--pingsweep', action='store_true', dest='do_pings', required=False, default=False,help='do a ping sweep to only scan up hosts')
-
+    parser.add_argument(
+        '-t', '--threads', 
+        type=int, 
+        action='store', 
+        dest='threads', 
+        required=False, 
+        default=1,
+        help='number of threads'
+    )
+    parser.add_argument(
+        '-d', '--delay', 
+        type=float, 
+        action='store', 
+        dest='delay', 
+        required=False, 
+        default=0.1,
+        help='delay in seconds'
+    )
+    # Task1: Port filtering – control which port states are shown
+    parser.add_argument(
+        '--display', 
+        action='store',
+        choices=['all', 'open', 'closed'], 
+        dest='display', 
+        required=False, 
+        default='all', 
+        help='chose what ports to be diplayed, all, open, closed'
+    )
+    parser.add_argument(
+        '-out', '--output-to-file', 
+        type=str, 
+        dest='output_file', 
+        required=False, 
+        default=None, 
+        help='output filename (e.g., results.txt or results.csv)'
+    )
+    parser.add_argument(
+        '-f', '--output-format', 
+        choices=['txt', 'csv'], 
+        default='txt', 
+        help='output format: txt or csv'
+    )
+    parser.add_argument(
+        '-sv', '--servicescan', 
+        action='store_true', 
+        dest='servicescan', 
+        required=False, 
+        default=False, 
+        help='service scan'
+    )
+    parser.add_argument(
+        '--show-vulns', 
+        action='store_true', 
+        dest='show_vulns', 
+        required=False, 
+        default=False,
+        help='show vulnerabilities'
+    )
+    parser.add_argument(
+        '-ps', '--pingsweep', 
+        action='store_true', 
+        dest='do_pings', 
+        required=False, 
+        default=False,
+        help='do a ping sweep to only scan up hosts'
+    )
+    
+    parser.set_defaults(scanType='connect')
 
     return parser
 
+# Task3: Custom port lists – parse user specified ports
 def parsePort(input):
     portsstr = None
     ports = []
@@ -425,23 +591,23 @@ def parsePort(input):
             raise argparse.ArgumentTypeError("Invalid port number")
     return ports
 
+#Task10 "IP Range Scanning"
 def getIPaddresses(address, threads):
     '''
-    :param address: the entered ip address from user
-    :return: list of hosts to scan
+    Expand single IP, range (x.x.x.a-b) or CIDR into a host list.
     '''
     #allows for a range or cidr notation of ip addresses
     hosts = []
     address = address.strip()
 
-    if '/' in address:
+    if '/' in address: #CIDR notation detected
         try:
             network = ipaddress.ip_network(address).hosts()
             hosts = [str(ip) for ip in network]
             return hosts
         except:
             sys.exit('invalid CIDR notation')
-    elif '-' in address:
+    elif '-' in address: #Range notation detected
         try:
             segments = address.split('.')
             hostRange = segments[3].split('-')
@@ -461,8 +627,8 @@ def getIPaddresses(address, threads):
         except:
             print("you get an error")
             sys.exit("Invalid Host")
-#JL Edit V1
 
+# Task5: Simultaneous scanning – multi host worker function
 
 def scan_port_with_progress(target, port, ifServiceScan, progress, taskID):
     result = scan_port_connect(target, port, ifServiceScan)
@@ -473,6 +639,7 @@ def scan_port_with_progress(target, port, ifServiceScan, progress, taskID):
 
     return result
 
+#Task9 "Service Detection"
 
 def scan_port_connect(target, port, ifServiceScan):
     '''
@@ -486,7 +653,7 @@ def scan_port_connect(target, port, ifServiceScan):
     try:
 
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(0.5)
+        sock.settimeout(0.5) # Set a 500ms timeout for an attempted connection
         result = sock.connect_ex((target, port))
 
         banner = ""
@@ -509,7 +676,7 @@ def scan_port_connect(target, port, ifServiceScan):
                                 if not data:
                                     break
                                 response.append(data.decode(errors='ignore'))
-                            except socket.timeout:
+                            except socket.timeout: # Connection timed out, likely was filtered
                                 break
                         raw = ''.join(response) if response else None
 
@@ -569,15 +736,14 @@ def scan_port_connect(target, port, ifServiceScan):
                 'service': 'ERROR',
                 'state': 'ERROR'
             }
-# takes in the info and runs the scan then it outputs to a group of all the threads results for post processing
+
+# Task 5: multi host threading
+# Distribute hosts across threads and collect results
 def busybeeIFMultipleHosts(hosts, ports, delay, groupedResults, index, ifServiceScan, progress, taskID):
-    '''
-    :param delay: delay between scans
-    :param ports: ports to scan
-    :param hosts: hosts to scan
-    :param groupedResults: the final results of all threads
-    :param index: id of thread
-    '''
+    
+    """
+    Scan multiple hosts concurrently and store results per thread.
+    """
     # multiplies threads and delays to allow the user to have a precise delay so threads are staggered so the packet only gets sent so often
 
 
@@ -593,16 +759,11 @@ def busybeeIFMultipleHosts(hosts, ports, delay, groupedResults, index, ifService
         groupedResults[index] = local
 
 
-# only do one host. so only split ports and not hosts
+# Task5: Single host threading – split ports across threads
 def busyBeeIFOneHost(hosts, ports, delay, groupedResults, index, ifServiceScan, progress,taskID):
-    '''
-    :param hosts:
-    :param ports:
-    :param delay:
-    :param groupedResults:
-    :param index:
-    :return:
-    '''
+    """
+    Scan one host with port ranges split between threads.
+    """
 
     local = []
     target = hosts[0]
@@ -614,8 +775,9 @@ def busyBeeIFOneHost(hosts, ports, delay, groupedResults, index, ifServiceScan, 
         local.append(scan_port_with_progress(target, ports, ifServiceScan, progress, taskID))
     groupedResults[index] = local
 
+# Task6: Logging and reporting – save results to CSV
 def save_as_csv(fileName, finalOutput, args):
-    """Save results in CSV format"""
+    """Save scan results to CSV, respecting display filters."""
     import csv
     
     with open(fileName, 'w', newline='') as f:
@@ -625,6 +787,8 @@ def save_as_csv(fileName, finalOutput, args):
             
             for host in finalOutput.keys():
                 for result in finalOutput[host]:
+                    if isinstance(result, dict):
+                        continue
                     port, service, state, banner = result
                     
                     if args.display == 'all' or \
@@ -638,6 +802,9 @@ def save_as_csv(fileName, finalOutput, args):
             
             for host in finalOutput.keys():
                 for result in finalOutput[host]:
+                    if isinstance(result, dict):
+                        continue
+                    
                     port, service, state = result
                 
                     if args.display == 'all' or \
@@ -645,8 +812,9 @@ def save_as_csv(fileName, finalOutput, args):
                        (args.display == 'closed' and state == 'CLOSED'):
                         writer.writerow([host, port, service, state])
 
+# Task6: Logging and reporting – save results to TXT
 def save_as_txt(fileName, finalOutput, args):
-    """Save results in TXT format"""
+    """Save formatted scan report to TXT, respecting display filters."""
     with open(fileName, 'w') as f:
         f.write("="*70 + "\n")
         f.write(f"PORT SCAN REPORT\n")
@@ -664,9 +832,11 @@ def save_as_txt(fileName, finalOutput, args):
             f.write(f"{'-'*70}\n")
             
             for result in finalOutput[host]:
+                if isinstance(result, dict):
+                    continue
+                    
                 if args.servicescan:
                     port, service, state, banner = result
-                    # ✅ NEW: Respect --display filter
                     if args.display == 'all' or \
                        (args.display == 'open' and state == 'OPEN') or \
                        (args.display == 'closed' and state == 'CLOSED'):
@@ -676,7 +846,6 @@ def save_as_txt(fileName, finalOutput, args):
                         f.write("\n")
                 else:
                     port, service, state = result
-                    # ✅ NEW: Respect --display filter
                     if args.display == 'all' or \
                        (args.display == 'open' and state == 'OPEN') or \
                        (args.display == 'closed' and state == 'CLOSED'):
@@ -685,9 +854,9 @@ def save_as_txt(fileName, finalOutput, args):
         f.write("\n" + "="*70 + "\n")
         f.write("END OF REPORT\n")
 
-# start of the post-processing function, takes in the results and deals with it #JL OUTPUT
+# Task6 "Logging and Reporting -- Main Output!"
 def outputFile(timestamp, finalOutput, args):
-    """Save scan results to file in txt or csv format"""
+    """Choose TXT or CSV output and save results."""
     
     # Determine filename
     if args.output_file:
@@ -704,29 +873,41 @@ def outputFile(timestamp, finalOutput, args):
     
     print(f"\n[+] Results saved to: {fileName}")
 
+
+"""
+EXTRA: OS detection
+Uses two methods to fingerprint the OS:
+  1. Banner analysis
+  2. TTL fingerprinting
+"""
 def osDetection(hostOutput, host):
+    #OS keyword lists for banner matching
     linux_distros = ["Ubuntu", "Debian", "Red Hat", "CentOS", "FreeBSD", "Raspbian"]
     microsoft_keywords = ['Microsoft', 'Windows']
     apple_keywords = ['Darwin', 'Apple']
     OS = ''
 
     try:
-        for port, service, state, banner in hostOutput:
+        for result in hostOutput:
+            if len(result) >= 4:
+                port, service, state, banner = result
+                
+                for distro in linux_distros:
+                    if distro.lower() in banner.lower():
+                        return f"Linux ({distro})"
 
-            for distro in linux_distros:
-                if distro.lower() in banner.lower():
-                    return f"Linux ({distro})"
+                for keyword in microsoft_keywords:
+                    if keyword.lower() in banner.lower():
+                        return "Windows"
 
-            for keyword in microsoft_keywords:
-                if keyword.lower() in banner.lower():
-                    return "Windows"
-
-            for keyword in apple_keywords:
-                if keyword.lower() in banner.lower():
-                    return "MacOS"
+                for keyword in apple_keywords:
+                    if keyword.lower() in banner.lower():
+                        return "MacOS"
+            # If result only has 3 elements, skip banner analysis
     except Exception as e:
         OS = ''
 
+     # TTL-based OS detection
     packet = IP(dst=host)/ICMP()
     reply = sr1(packet, timeout=2, verbose=0)
     if reply is None:
@@ -744,6 +925,7 @@ def osDetection(hostOutput, host):
             OS = f'Unknown OS'
     return OS
 
+#EXTRA "Scapy Scanning - Individual Port Scanner"
 def scanPort(host, scanningPort, flag, scanType):
         state = 'UNKNOWN'
         service = common_ports_dict.get(scanningPort, wellKnownPorts.get(scanningPort, 'TCP/UDP'))
@@ -758,10 +940,10 @@ def scanPort(host, scanningPort, flag, scanType):
                 tcp = rcv.getlayer(TCP)
                 if tcp:
                     if scanType == 'syn':
-                        if tcp.flags == 0x12:
+                        if tcp.flags == 0x12: # Syn-Ack received
                             state = 'OPEN'
                             sr(IP(dst=host) / TCP(dport=scanningPort, flags="R"), timeout=1, verbose=0)
-                        elif tcp.flags == 0x14:
+                        elif tcp.flags == 0x14: # Rst received
                             state = 'CLOSED'
                     elif scanType == 'ack':
                         if tcp.flags == 0x14:
@@ -780,6 +962,7 @@ def scanPort(host, scanningPort, flag, scanType):
         return [scanningPort, service, state]
 
 
+# EXTRA: Parallel Scapy scan over multiple ports
 def scapyScan(host, ports, scanType, progress, taskID):
     results = []
     flag = {'syn':'S','ack':'A','rst':'R','fin':'F'}.get(scanType, '')
@@ -795,19 +978,13 @@ def scapyScan(host, ports, scanType, progress, taskID):
     return results
 
 
-
+# Task2: Scan modes – build port lists for each mode
 def getPorts(portMode, numberOfHosts, start, end, threads,scanType, inputPorts = None):
-    '''
-    :param inputPorts:
-    :param portMode: common, range, all
-    :param numberOfHosts: number of hosts to scan
-    :param start: start port
-    :param end: end port
-    :param threads: number of threads
-    :return: list of ports to scan or lists of ports to scan
-    '''
+    """
+    Build port list (or per thread port chunks) from scan mode and range.
+    """
     if inputPorts:
-        return parsePort(inputPorts)
+        return parsePort(inputPorts) #Custom ports take priority
     else:
         listOfPorts = []
         match portMode:
@@ -841,9 +1018,10 @@ def getPorts(portMode, numberOfHosts, start, end, threads,scanType, inputPorts =
         else:
             return listOfPorts
 
+#Task8 "Port Range Validation"
 def validate_ports(ports, args):
     """
-    Task 8: Port Range Validation - Check for commonly used ports and display warnings
+    Warn before scanning many well-known or sensitive ports.
     """
     if ports and isinstance(ports[0], list):
         flat_ports = []
@@ -952,12 +1130,15 @@ def validate_ports(ports, args):
 
 def validate_open_ports(finalOutput, args):
     """
-    Task 8: Port Validation - Warn about OPEN sensitive ports AFTER scan completes
+    After scanning, warn about open well known or sensitive ports.
     """
     # Collect all OPEN ports from scan results
     open_ports = set()
     for host in finalOutput.keys():
         for result in finalOutput[host]:
+            if isinstance(result, dict):
+                continue
+                
             if args.servicescan:
                 port, service, state, banner = result
             else:
@@ -1066,19 +1247,26 @@ def validate_open_ports(finalOutput, args):
 
 def output(hosts, results, ifServicescan):
     finalOutput = {host: [] for host in hosts}
-    for host in hosts:
-        seen = set()
-        for group in results:
-            for result in group:
-                host = result.get('host')
-                if ifServicescan:
-                    finalOutput[host].append([result.get('port'), result.get('service'), result.get('state'), result.get('banner')])
-                else:
-                    finalOutput[host].append(
-                        [result.get('port'), result.get('service'), result.get('state')])
+    seen = set()  
+    for group in results:
+        for result in group:
+            result_host = result.get('host') 
+            if ifServicescan:
+                finalOutput[result_host].append([
+                    result.get('port'), 
+                    result.get('service'), 
+                    result.get('state'), 
+                    result.get('banner')
+                ])
+            else:
+                finalOutput[result_host].append([
+                    result.get('port'), 
+                    result.get('service'), 
+                    result.get('state')
+                ])
     return finalOutput
 
-
+#Task11 "Security Scanning"
 def security_scan_report(finalOutput, args):
     """
     Task 11: Security Scanning - Check for vulnerabilities in open ports
@@ -1198,6 +1386,9 @@ def security_scan_report(finalOutput, args):
     
     for host in finalOutput.keys():
         for result in finalOutput[host]:
+            if isinstance(result, dict):
+                continue
+            
             if args.servicescan:
                 port, service, state, banner = result
             else:
@@ -1281,7 +1472,13 @@ def main():
     if len(sys.argv) == 1:
         args = textual_interface()
     else:
+        parser = parse_arguments()
         args = parser.parse_args()
+
+        if not args.address:
+            parser.print_help()
+            sys.exit("\n[ERROR] Target address (-a/--address) is required in CLI mode.")
+
         if args.portMode == 'range':
             try:
                 if args.start is None:
@@ -1290,10 +1487,11 @@ def main():
                         raise ValueError
                 if args.end is None:
                     args.end = int(input("Enter end port: "))
-                    if args.start < 1 or args.start > 65535:
+                    if args.end < 1 or args.end > 65535:
                         raise ValueError
             except ValueError:
                 print("Please enter a valid port number")
+
 
 
     scanStart = time.time()
@@ -1310,6 +1508,10 @@ def main():
 
     Title = pyfiglet.figlet_format("Scanner", font="bloody")
     console = Console(force_terminal=True)
+
+    # Add spacing before banner for better readability
+    print("\n" * 3)  # Add 3 blank lines before banner
+
     console.print(f"[bold red]{Title}[/bold red]", justify="center")
     info = Text()
     info.append("Coded By : Benjamin and Josh\n", style="bold cyan")
@@ -1339,11 +1541,13 @@ def main():
     ports = getPorts(args.portMode, len(hosts), args.start, args.end, args.threads,args.scanType, args.port)
     validate_ports(ports if isinstance(ports, list) else ports[0], args)
 
+    #Calculate optimal number of threads based on the hosts and ports
     groupedResults = [[] for i in range(args.threads)]
     threads = []
     threadCount = args.threads
     if (len(hosts) > 1):
         if len(hosts) < args.threads:
+            #Single host mode
             threadCount = len(hosts)
 
     if (len(ports) > 1):
@@ -1360,19 +1564,29 @@ def main():
         for i in range(len(hosts)):
             hostChunks[i % threadCount].append(hosts[i])
 
-    total_ports = len(hosts) * len(ports)
+    # Calculate total work: port scans + OS detection per host
+    # Handle case where ports is list of lists (single host, multi-threaded)
+    if ports and isinstance(ports[0], list):
+        flat_ports = []
+        for sublist in ports:
+            flat_ports.extend(sublist)
+        total_port_count = len(flat_ports)
+    else:
+        total_port_count = len(ports) if ports else 0
+
+    total_ports = len(hosts) * total_port_count
+    total_work = total_ports + len(hosts)
+
     final = {host: [] for host in hosts}
     with Progress(
-            TextColumn("[bold blue]{task.description}"),
-            BarColumn(),
-            "[progress.percentage]{task.percentage:>3.0f}%",
-            TimeRemainingColumn(),
+        TextColumn("[bold blue]{task.description}"),
+        BarColumn(),
+        "[progress.percentage]{task.percentage:>3.0f}%",
+        TimeRemainingColumn(),
     ) as progress:
 
         # Create one task for the whole scan
-        taskID = progress.add_task("Scanning all hosts", total=total_ports)
-
-
+        taskID = progress.add_task("Scanning all hosts", total=total_work)
 
         if args.scanType == 'connect':
             for t in range(threadCount):
@@ -1380,7 +1594,6 @@ def main():
                     thread = threading.Thread(target=busyBeeIFOneHost, args=(
                     hosts, ports[t], args.delay, groupedResults, t, args.servicescan, progress, taskID))
                     threads.append(thread)
-
                 else:
                     thread = threading.Thread(target=busybeeIFMultipleHosts, args=(
                     hostChunks[t], ports, args.delay, groupedResults, t, args.servicescan, progress, taskID))
@@ -1397,16 +1610,33 @@ def main():
             elif isinstance(hosts, str):
                 final[hosts] = scapyScan(hosts, ports, args.scanType, progress, taskID)
 
-    scannedHosts = set()
-    for group in groupedResults:
-        for result in group:
-            scannedHosts.add(result.get('host'))
-    if args.scanType == 'connect':
-        final = output(scannedHosts, groupedResults, args.servicescan)
+        scannedHosts = set()
+        for group in groupedResults:
+            for result in group:
+                scannedHosts.add(result.get('host'))
+        if args.scanType == 'connect':
+            final = output(scannedHosts, groupedResults, args.servicescan)
+
+        for host in final.keys():
+            sorted_results = sorted(final[host], key=lambda x: x[0])
+
+            ##EXTRA Perform OS detection 
+            os = osDetection(sorted_results, host)
+            
+            progress.update(taskID, advance=1)
+            
+            # Store OS result for display later
+            final[host].insert(0, {'os': os})  # Store OS at beginning of results
 
     for host in final.keys():
-        sorted_results = sorted(final[host], key=lambda x: x[0])
-        os = osDetection(sorted_results, host)
+        # Extract OS from stored results
+        os_info = final[host][0] if final[host] and isinstance(final[host][0], dict) else {'os': 'Unknown'}
+        os = os_info.get('os', 'Unknown')
+        
+        # Get actual port results (skip the OS dict we inserted)
+        sorted_results = [r for r in final[host] if not isinstance(r, dict)]
+        sorted_results = sorted(sorted_results, key=lambda x: x[0])
+        
         console.print(f"\n [bold purple]Host:[/bold purple] [bold blue]{host} -> OS: {os}[/bold blue]")
 
         if not sorted_results:
@@ -1446,18 +1676,17 @@ def main():
                 row[2] = f"[bold green]{state}[/bold green]"
                 table.add_row(*[str(item) if item is not None else "" for item in row])
 
-
-
-
         console.print(table)
 
+    # Display post-scan port warnings
     validate_open_ports(final, args)
 
+    # Display security vulnerability report
     security_scan_report(final, args)
 
+     # Save results to file if requested
     if args.output_file or args.output_format != 'txt':
         outputFile(scanStart, final, args)
 
 if __name__ == "__main__":
     main()
-
