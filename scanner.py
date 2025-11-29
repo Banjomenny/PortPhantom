@@ -665,6 +665,10 @@ def scan_port_connect(target, port, ifServiceScan):
                 if port in [21, 22, 23, 25, 110, 143, 3306, 5432, 6379, 6667]:
                     try:
                         banner = sock.recv(4096).decode(errors='ignore')
+
+                        if not banner and port == 25:
+                            sock.sendall(b"EHLO scanner.local\r\n")
+                            banner = sock.recv(4096).decode(errors='ignore')
                     except:
                         banner = "NO BANNER"
                 elif port in [80, 8080, 8888, 9000, 9200, 10000]:
@@ -883,43 +887,56 @@ EXTRA: Vulnerability Assement
 """
 
 
-def queryCpe(cpe):
-    results = nvdlib.searchCVE(cpeName=cpe)
+def queryCpe(cpe=None, product=None, version=None):
     vulns = []
-    for r in results:
-        score = None
-        severity = None
+    results = []
 
-        metrics = getattr(r, "metrics", None)
+    try:
+
+        if cpe and cpe.lower() != "unknown":
+            results = nvdlib.searchCVE(cpeName=cpe, key="0eab28a9-ae73-40c0-9b7d-ae587f8a152b")
 
 
-        if metrics and hasattr(metrics, "cvssMetricV31") and metrics.cvssMetricV31:
-            score = metrics.cvssMetricV31[0].cvssData.baseScore
-            severity = getattr(metrics.cvssMetricV31[0], "baseSeverity", None)
+        if not results and product and version:
+            results = nvdlib.searchCVE(
+                keywordSearch=f"{product} {version}",
+                key="0eab28a9-ae73-40c0-9b7d-ae587f8a152b"
+            )
 
-        elif metrics and hasattr(metrics, "cvssMetricV30") and metrics.cvssMetricV30:
-            score = metrics.cvssMetricV30[0].cvssData.baseScore
-            severity = getattr(metrics.cvssMetricV30[0], "baseSeverity", None)
+        # Parse results
+        for r in results:
+            score = None
+            severity = None
+            metrics = getattr(r, "metrics", None)
 
-        elif metrics and hasattr(metrics, "cvssMetricV3") and metrics.cvssMetricV3:
-            score = metrics.cvssMetricV3[0].cvssData.baseScore
-            severity = getattr(metrics.cvssMetricV3[0], "baseSeverity", None)
+            if metrics and getattr(metrics, "cvssMetricV31", None):
+                score = metrics.cvssMetricV31[0].cvssData.baseScore
+                severity = getSeverity(score)
+            elif metrics and getattr(metrics, "cvssMetricV30", None):
+                score = metrics.cvssMetricV30[0].cvssData.baseScore
+                severity = getSeverity(score)
+            elif metrics and getattr(metrics, "cvssMetricV3", None):
+                score = metrics.cvssMetricV3[0].cvssData.baseScore
+                severity = getSeverity(score)
+            elif metrics and getattr(metrics, "cvssMetricV2", None):
+                score = metrics.cvssMetricV2[0].cvssData.baseScore
+                severity = getSeverity(score)
 
-        elif metrics and hasattr(metrics, "cvssMetricV2") and metrics.cvssMetricV2:
-            score = metrics.cvssMetricV2[0].cvssData.baseScore
-            severity = getattr(metrics.cvssMetricV2[0], "baseSeverity", None)
+            if severity is None and score is not None:
+                severity = getSeverity(score)
 
-        if severity is None:
-            severity = getSeverity(score)
+            vulns.append({
+                "ID": r.id,
+                "Description": r.descriptions[0].value if r.descriptions else None,
+                "Score": score,
+                "Severity": severity
+            })
 
-        vulns.append({
-            "ID": r.id,
-            "Description": r.descriptions[0].value if r.descriptions else None,
-            "Score": score,
-            "Severity": severity
-        })
+    except Exception as e:
+        print(f"Error querying NVD: {e}")
 
     return vulns
+
 
 
 def rateVulnerabilities(vulns):
@@ -1071,12 +1088,13 @@ def normalizeBanner(banner):
 
 
 def extractProductVersion(banner):
-    match = re.search(r"([a-zA-Z][a-zA-Z0-9\-\._]+)[/ ]?([0-9][\w\.\-]*)", banner)
+    match = re.search(r"\(?([A-Za-z][A-Za-z0-9\-\._]+)\)?[ /]?([0-9][\w\.\-]*)", banner)
     if match:
         product = match.group(1)
         version = match.group(2)
         return product, version
-    return banner, None
+    return banner.strip(), None
+
 
 
 VENDORMAP = {
@@ -1969,12 +1987,13 @@ def main():
                         continue
 
                     result = parseBanner(banner)
-                    if result["vendor"] == "Unknown":
-                        continue
+                    if not result["vendor"] == "Unknown":
+                        cpe = buildCpe(result["vendor"], result["product"], result["version"])
+                    else:
+                        cpe = "Unknown"
+                    product, version = extractProductVersion(row[3])
 
-
-                    cpe = buildCpe(result["vendor"], result["product"], result["version"])
-                    vulns = queryCpe(cpe)
+                    vulns = queryCpe(cpe, product, version)
                     for v in vulns:
                         hostsData[host][row[1]].append(v)
 
@@ -2004,7 +2023,8 @@ def main():
                     return item
                 else:
                     return Text(str(item))
-
+            product, version = extractProductVersion(row[3])
+            row[3] = f"{safe_render(product)} {safe_render(version)}"
             state = row[2]
             if state in style_map:
                 style, displays = style_map[state]
