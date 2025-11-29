@@ -873,6 +873,146 @@ def outputFile(timestamp, finalOutput, args):
     
     print(f"\n[+] Results saved to: {fileName}")
 
+"""
+EXTRA: Vulnerability Assement
+    queries the Nist database for known vulnerabilites
+    grabs the banners and parses them through the database
+"""
+
+
+def queryCpe(cpe):
+    results = nvdlib.searchCVE(cpeName=cpe)
+
+    vulns = []
+    for r in results:
+        vulns.append({
+            "CVE": r.id,
+            "Description": r.descriptions[0].value if r.descriptions else "No description",
+            "Score": r.score[0].baseScore if r.score else None,
+            "Severity": r.score[0].baseSeverity if r.score else None
+        })
+    return vulns
+
+
+def rateVulnerabilities(vulns):
+    scores = [v['Score'] for v in vulns if v['Score'] is not None]
+    if not scores:
+        return "No known vulnerabilities found"
+
+    maxScore = max(scores)
+    if maxScore >= 9:
+        return "Critical"
+    elif maxScore >= 7:
+        return "High"
+    elif maxScore >= 4:
+        return "Medium"
+    else:
+        return "Low"
+
+"""
+EXTRA: create the CPE to search the database
+    determines if its software, hardware or os
+    and returns the cpe string to query the database
+"""
+
+def detectPart(product):
+    product = product.lower()
+    if product in ["windows", "debian", "ubuntu", "centos", "redhat", "junos", "ios"]:
+        return "o"
+    if product in ["cisco", "juniper", "fortinet", "hp", "dell"]:
+        return "h"
+    return "a"
+
+def buildCpe(vendor, product, version, part = detectPart(product)):
+    return f"cpe:2.3:{part}:{vendor.lower()}:{product.lower()}:{version}:*:*:*:*:*:*:*"
+
+
+"""
+EXTRA handle Banners
+    takes the banner given and creates the keywords needed to query vulns
+"""
+
+def normalizeBanner(banner):
+    banner = banner.lower()
+    banner = banner.replace("_", " ")
+    banner = re.sub(r"\(.*?\)", "", banner)  # remove parentheses
+    return banner.strip()
+
+def extractProductVersion(banner):
+    match = re.search(r"([a-zA-Z\-]+)[/ ]?([0-9][\w\.\-]*)", banner)
+    if match:
+        product = match.group(1)
+        version = match.group(2)
+        return product, version
+    return banner, None
+
+VENDOR_MAP = {
+    "apache": ("Apache", "httpd"),
+    "nginx": ("F5", "nginx"),
+    "openssh": ("OpenBSD", "OpenSSH"),
+    "microsoft-iis": ("Microsoft", "IIS"),
+    "mysql": ("Oracle", "MySQL"),
+    "postgresql": ("PostgreSQL Global Development Group", "PostgreSQL"),
+    "tomcat": ("Apache", "Tomcat"),
+    "jetty": ("Eclipse Foundation", "Jetty"),
+    "jboss": ("Red Hat", "JBoss"),
+    "wildfly": ("Red Hat", "WildFly"),
+    "glassfish": ("Eclipse Foundation", "GlassFish"),
+    "nodejs": ("OpenJS Foundation", "Node.js"),
+    "php": ("The PHP Group", "PHP"),
+    "perl": ("Perl Foundation", "Perl"),
+    "python": ("Python Software Foundation", "Python"),
+    "ruby": ("Ruby Community", "Ruby"),
+    "vsftpd": ("Sami Kerola", "vsftpd"),
+    "proftpd": ("ProFTPD Project", "ProFTPD"),
+    "pure-ftpd": ("PureFTPd Project", "Pure-FTPd"),
+    "bind": ("ISC", "BIND"),
+    "dnsmasq": ("Simon Kelley", "dnsmasq"),
+    "isc-dhcp": ("ISC", "DHCP"),
+    "openvpn": ("OpenVPN", "OpenVPN"),
+    "strongswan": ("strongSwan Project", "strongSwan"),
+    "openswan": ("Xelerance", "Openswan"),
+    "samba": ("Samba Team", "Samba"),
+    "cisco-ios": ("Cisco", "IOS"),
+    "cisco-asa": ("Cisco", "ASA"),
+    "juniper-junos": ("Juniper Networks", "Junos"),
+    "exim": ("Exim Project", "Exim"),
+    "postfix": ("Postfix Project", "Postfix"),
+    "sendmail": ("Sendmail Consortium", "Sendmail"),
+    "dovecot": ("Dovecot Project", "Dovecot"),
+    "courier": ("Courier Project", "Courier"),
+    "openldap": ("OpenLDAP Project", "OpenLDAP"),
+    "mariadb": ("MariaDB Foundation", "MariaDB"),
+    "oracle-database": ("Oracle", "Database"),
+    "sqlserver": ("Microsoft", "SQL Server"),
+    "mongodb": ("MongoDB Inc.", "MongoDB"),
+    "redis": ("Redis Labs", "Redis"),
+    "elasticsearch": ("Elastic", "Elasticsearch"),
+    "kibana": ("Elastic", "Kibana"),
+    "logstash": ("Elastic", "Logstash"),
+}
+
+def mapVendorProduct(product):
+    key = product.lower()
+    if key in VENDORMAP:
+        return VENDORMAP[key]
+    return product, product
+
+
+def parse_banner(banner: str):
+    normalized = normalizeBanner(banner)
+    product, version = extractProductVersion(normalized)
+    vendor, canonicalProduct = mapVendorProduct(product)
+
+    return {
+        "vendor": vendor,
+        "product": canonicalProduct,
+        "version": version,
+        "extra": banner
+    }
+
+
+
 
 """
 EXTRA: OS detection
@@ -1688,5 +1828,10 @@ def main():
     if args.output_file or args.output_format != 'txt':
         outputFile(scanStart, final, args)
 
+
+
+
+
 if __name__ == "__main__":
     main()
+
