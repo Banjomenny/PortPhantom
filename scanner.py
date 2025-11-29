@@ -29,7 +29,8 @@ import os
 import time     
 import socket    
 import threading 
-import argparse  
+import argparse
+import nvdlib
 from enum import Enum  
 from concurrent.futures import ProcessPoolExecutor 
 
@@ -43,6 +44,8 @@ from rich.table import Table
 from rich.text import Text
 from scapy.all import *
 from scapy.layers.inet import IP, ICMP, TCP
+
+
 
 # Task5: Simultaneous scanning – shared state for threaded progress
 threadLock = threading.Lock() # Prevent race conditions in progress updates
@@ -882,15 +885,40 @@ EXTRA: Vulnerability Assement
 
 def queryCpe(cpe):
     results = nvdlib.searchCVE(cpeName=cpe)
-
     vulns = []
     for r in results:
+        score = None
+        severity = None
+
+        metrics = getattr(r, "metrics", None)
+
+
+        if metrics and hasattr(metrics, "cvssMetricV31") and metrics.cvssMetricV31:
+            score = metrics.cvssMetricV31[0].cvssData.baseScore
+            severity = getattr(metrics.cvssMetricV31[0], "baseSeverity", None)
+
+        elif metrics and hasattr(metrics, "cvssMetricV30") and metrics.cvssMetricV30:
+            score = metrics.cvssMetricV30[0].cvssData.baseScore
+            severity = getattr(metrics.cvssMetricV30[0], "baseSeverity", None)
+
+        elif metrics and hasattr(metrics, "cvssMetricV3") and metrics.cvssMetricV3:
+            score = metrics.cvssMetricV3[0].cvssData.baseScore
+            severity = getattr(metrics.cvssMetricV3[0], "baseSeverity", None)
+
+        elif metrics and hasattr(metrics, "cvssMetricV2") and metrics.cvssMetricV2:
+            score = metrics.cvssMetricV2[0].cvssData.baseScore
+            severity = getattr(metrics.cvssMetricV2[0], "baseSeverity", None)
+
+        if severity is None:
+            severity = getSeverity(score)
+
         vulns.append({
-            "CVE": r.id,
-            "Description": r.descriptions[0].value if r.descriptions else "No description",
-            "Score": r.score[0].baseScore if r.score else None,
-            "Severity": r.score[0].baseSeverity if r.score else None
+            "ID": r.id,
+            "Description": r.descriptions[0].value if r.descriptions else None,
+            "Score": score,
+            "Severity": severity
         })
+
     return vulns
 
 
@@ -910,6 +938,107 @@ def rateVulnerabilities(vulns):
         return "Low"
 
 """
+EXTRA: makes the output look nice
+    handles all output and outputting to user
+"""
+from collections import defaultdict
+
+def build_report(hosts_data):
+    report = {}
+    severity_order = ["LOW", "MEDIUM", "HIGH", "CRITICAL"]
+
+    for host, services in hosts_data.items():
+        all_cves = [cve for svc in services.values() for cve in svc]
+        severities = [c["Severity"] for c in all_cves if c.get("Severity")]
+        max_severity = max(severities, key=lambda s: severity_order.index(s)) if severities else None
+        tier_counts = {tier: sum(1 for c in all_cves if c.get("Severity") == tier) for tier in severity_order}
+        service_tables = {
+            svc: [(c["ID"], c["Score"], c["Severity"]) for c in cves]
+            for svc, cves in services.items()
+        }
+
+        report[host] = {
+            "MaxSeverity": max_severity,
+            "TierCounts": tier_counts,
+            "ServiceTables": service_tables
+        }
+
+    return report
+
+
+    return report
+
+from rich.console import Console
+from rich.table import Table
+
+console = Console()
+
+def getSeverity(score):
+    if score is None:
+        return None
+    if score >= 9.0:
+        return "CRITICAL"
+    elif score >= 7.0:
+        return "HIGH"
+    elif score >= 4.0:
+        return "MEDIUM"
+    elif score > 0.0:
+        return "LOW"
+    return None
+
+from rich.console import Console
+from rich.table import Table
+
+console = Console()
+
+def severity_color(severity: str) -> str:
+    if severity == "CRITICAL":
+        return "[bold red]CRITICAL[/bold red]"
+    elif severity == "HIGH":
+        return "[bold yellow]HIGH[/bold yellow]"
+    elif severity == "MEDIUM":
+        return "[bold cyan]MEDIUM[/bold cyan]"
+    elif severity == "LOW":
+        return "[bold green]LOW[/bold green]"
+    return "[dim]None[/dim]"
+
+def render_report(report):
+    for host, data in report.items():
+        console.rule(f"[bold magenta]Host: {host}")
+
+        # Overall summary table
+        summary = Table(title="Host Summary", show_header=True, header_style="bold magenta")
+        summary.add_column("Max Severity", style="bold white")
+        summary.add_column("Critical", justify="center")
+        summary.add_column("High", justify="center")
+        summary.add_column("Medium", justify="center")
+        summary.add_column("Low", justify="center")
+
+        counts = data["TierCounts"]
+        summary.add_row(
+            severity_color(data["MaxSeverity"]) if data["MaxSeverity"] else "[dim]None[/dim]",
+            f"[bold red]{counts.get('CRITICAL', 0)}[/bold red]",
+            f"[bold yellow]{counts.get('HIGH', 0)}[/bold yellow]",
+            f"[bold cyan]{counts.get('MEDIUM', 0)}[/bold cyan]",
+            f"[bold green]{counts.get('LOW', 0)}[/bold green]",
+        )
+        console.print(summary)
+
+        # Per-service mini tables
+        for svc, rows in data["ServiceTables"].items():
+            svc_table = Table(title=f"Service: {svc}", show_header=True, header_style="bold cyan")
+            svc_table.add_column("CVE ID", style="yellow")
+            svc_table.add_column("Score", justify="center")
+            svc_table.add_column("Severity", style="bold white")
+
+            for cve_id, score, severity in rows:
+                svc_table.add_row(cve_id, str(score), severity_color(severity))
+
+            console.print(svc_table)
+
+
+
+"""
 EXTRA: create the CPE to search the database
     determines if its software, hardware or os
     and returns the cpe string to query the database
@@ -923,7 +1052,8 @@ def detectPart(product):
         return "h"
     return "a"
 
-def buildCpe(vendor, product, version, part = detectPart(product)):
+def buildCpe(vendor, product, version):
+    part = detectPart(product)
     return f"cpe:2.3:{part}:{vendor.lower()}:{product.lower()}:{version}:*:*:*:*:*:*:*"
 
 
@@ -934,19 +1064,22 @@ EXTRA handle Banners
 
 def normalizeBanner(banner):
     banner = banner.lower()
-    banner = banner.replace("_", " ")
+    banner = re.sub(r"^\d+\s+", "", banner)  # strip leading codes like 220
     banner = re.sub(r"\(.*?\)", "", banner)  # remove parentheses
+    banner = banner.replace("_", " ")
     return banner.strip()
 
+
 def extractProductVersion(banner):
-    match = re.search(r"([a-zA-Z\-]+)[/ ]?([0-9][\w\.\-]*)", banner)
+    match = re.search(r"([a-zA-Z][a-zA-Z0-9\-\._]+)[/ ]?([0-9][\w\.\-]*)", banner)
     if match:
         product = match.group(1)
         version = match.group(2)
         return product, version
     return banner, None
 
-VENDOR_MAP = {
+
+VENDORMAP = {
     "apache": ("Apache", "httpd"),
     "nginx": ("F5", "nginx"),
     "openssh": ("OpenBSD", "OpenSSH"),
@@ -993,23 +1126,56 @@ VENDOR_MAP = {
 }
 
 def mapVendorProduct(product):
+    if not product:
+        return ("Unknown", "Unknown")
     key = product.lower()
     if key in VENDORMAP:
         return VENDORMAP[key]
-    return product, product
+    return ("Unknown", product)
 
 
-def parse_banner(banner: str):
+def cleanProductName(product: str) -> str:
+    if not product:
+        return "unknown"
+
+    product = product.lower()
+    prefixes = [
+        r"^ssh-\d+\.\d+-",
+        r"^ftp-\d+\.\d+-",
+        r"^http-\d+\.\d+-",
+        r"^smtp-\d+\.\d+-",
+        r"^pop3-\d+\.\d+-",
+        r"^imap-\d+\.\d+-",
+        r"^telnet-\d+\.\d+-",
+    ]
+
+    for p in prefixes:
+        product = re.sub(p, "", product)
+
+    product = product.replace("_", "-")
+    product = re.sub(r"-+", "-", product)
+
+    return product.strip()
+
+
+def parseBanner(banner):
     normalized = normalizeBanner(banner)
     product, version = extractProductVersion(normalized)
-    vendor, canonicalProduct = mapVendorProduct(product)
+    product = cleanProductName(product)
+    mapping = mapVendorProduct(product)
+
+    if mapping:
+        vendor, canonicalProduct = mapping
+    else:
+        vendor, canonicalProduct = "Unknown", product
 
     return {
         "vendor": vendor,
         "product": canonicalProduct,
-        "version": version,
+        "version": version or "-",
         "extra": banner
     }
+
 
 
 
@@ -1757,18 +1923,25 @@ def main():
         if args.scanType == 'connect':
             final = output(scannedHosts, groupedResults, args.servicescan)
 
+
+
         for host in final.keys():
             sorted_results = sorted(final[host], key=lambda x: x[0])
 
             ##EXTRA Perform OS detection 
             os = osDetection(sorted_results, host)
-            
             progress.update(taskID, advance=1)
-            
+
+
+
+
+
             # Store OS result for display later
             final[host].insert(0, {'os': os})  # Store OS at beginning of results
 
+    hostsData = defaultdict(lambda: defaultdict(list))
     for host in final.keys():
+        vulns = []
         # Extract OS from stored results
         os_info = final[host][0] if final[host] and isinstance(final[host][0], dict) else {'os': 'Unknown'}
         os = os_info.get('os', 'Unknown')
@@ -1776,7 +1949,9 @@ def main():
         # Get actual port results (skip the OS dict we inserted)
         sorted_results = [r for r in final[host] if not isinstance(r, dict)]
         sorted_results = sorted(sorted_results, key=lambda x: x[0])
-        
+
+
+
         console.print(f"\n [bold purple]Host:[/bold purple] [bold blue]{host} -> OS: {os}[/bold blue]")
 
         if not sorted_results:
@@ -1786,6 +1961,22 @@ def main():
         if num_cols > 3:
             headers.extend([f"Col{i}" for i in range(4, num_cols + 1)])
             headers[3] = "Banner"
+
+            if args.show_vulns:
+                for row in sorted_results:
+                    banner = row[3]
+                    if not banner or banner.strip().upper() == "NO BANNER":
+                        continue
+
+                    result = parseBanner(banner)
+                    if result["vendor"] == "Unknown":
+                        continue
+
+
+                    cpe = buildCpe(result["vendor"], result["product"], result["version"])
+                    vulns = queryCpe(cpe)
+                    for v in vulns:
+                        hostsData[host][row[1]].append(v)
 
         table = Table(show_header=True, header_style="bold blue")
         for h in headers:
@@ -1798,23 +1989,28 @@ def main():
                 continue
             seen.add(port)
 
-            # Format state with colors
+            style_map = {
+                "OPEN": ("bold green", ["all", "open"]),
+                "CLOSED": ("bold red", ["all", "closed"]),
+                "FILTERED": ("bold yellow", ["all", "open", "closed"]),
+                "UNFILTERED": ("bold green", ["all", "open", "closed"]),
+                "OPEN|FILTERED": ("bold green", ["all", "open", "closed"]),
+            }
+
+            def safe_render(item):
+                if item is None:
+                    return ""
+                elif isinstance(item, Text):
+                    return item
+                else:
+                    return Text(str(item))
+
             state = row[2]
-            if state == 'OPEN' and (args.display in ['all', 'open']):
-                row[2] = f"[bold green]{state}[/bold green]"
-                table.add_row(*[str(item) if item is not None else "" for item in row])
-            elif state == 'CLOSED' and (args.display in ['all', 'closed']):
-                row[2] = f"[bold red]{state}[/bold red]"
-                table.add_row(*[str(item) if item is not None else "" for item in row])
-            elif state == 'FILTERED' and (args.display in ['all']):
-                row[2] = f"[bold yellow]{state}[/bold yellow]"
-                table.add_row(*[str(item) if item is not None else "" for item in row])
-            elif state == 'UNFILTERED' and (args.display in ['all']):
-                row[2] = f"[bold green]{state}[/bold green]"
-                table.add_row(*[str(item) if item is not None else "" for item in row])
-            elif state == 'OPEN|FILTERED' and (args.display in ['all']):
-                row[2] = f"[bold green]{state}[/bold green]"
-                table.add_row(*[str(item) if item is not None else "" for item in row])
+            if state in style_map:
+                style, displays = style_map[state]
+                if args.display in displays:
+                    row[2] = Text(state, style=style)
+                    table.add_row(*[safe_render(item) for item in row])
 
         console.print(table)
 
@@ -1822,11 +2018,18 @@ def main():
     validate_open_ports(final, args)
 
     # Display security vulnerability report
-    security_scan_report(final, args)
+    if args.show_vulns:
+        report = build_report(hostsData)
+        render_report(report)
+
+        security_scan_report(final, args)
+
 
      # Save results to file if requested
     if args.output_file or args.output_format != 'txt':
         outputFile(scanStart, final, args)
+
+
 
 
 
