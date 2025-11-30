@@ -649,7 +649,7 @@ def scan_port_connect(target, port, ifServiceScan):
     try:
 
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(0.5) # Set a 500ms timeout for an attempted connection
+        sock.settimeout(2) # Set a 500ms timeout for an attempted connection
         result = sock.connect_ex((target, port))
 
         banner = ""
@@ -1455,12 +1455,18 @@ def validate_open_ports(finalOutput, args):
             if isinstance(result, dict):
                 continue
                 
-            if args.servicescan:
-                port, service, state, banner = result
-            else:
-                port, service, state = result
+           #
+            try:
+                if args.servicescan and len(result) >= 4:
+                    port, service, state, banner = result
+                elif len(result) >= 3:
+                    port, service, state = result
+                else:
+                    continue 
+            except (ValueError, TypeError):
+                continue
             
-            if state == 'OPEN':
+            if 'OPEN' in state:
                 open_ports.add(port)
     
     if not open_ports:
@@ -1692,7 +1698,7 @@ def security_scan_report(finalOutput, args):
         }
     }
     
-    # Collect vulnerabilities from scan results
+    # ✓ CORRECT: Initialize ONCE, BEFORE the loops (4 spaces)
     vulnerabilities = {
         'CRITICAL': [],
         'HIGH': [],
@@ -1700,24 +1706,38 @@ def security_scan_report(finalOutput, args):
         'LOW': []
     }
     
+    # Outer loop: 4 spaces
     for host in finalOutput.keys():
+        # Inner loop: 8 spaces
         for result in finalOutput[host]:
+            # First if: 12 spaces
             if isinstance(result, dict):
+                # continue: 16 spaces
                 continue
             
-            if args.servicescan:
-                port, service, state, banner = result
-            else:
-                port, service, state = result
+            # try block: 12 spaces (same level as the if above)
+            try:
+                # Content inside try: 16 spaces
+                if args.servicescan and len(result) >= 4:
+                    port, service, state, banner = result
+                elif len(result) >= 3:
+                    port, service, state = result
+                else:
+                    continue
+            # except: 12 spaces (SAME level as try)
+            except (ValueError, TypeError):
+                # Content inside except: 16 spaces
+                continue
             
-            # Only report on OPEN ports with known vulnerabilities
-            if state == 'OPEN' and port in VULNERABILITY_DB:
+            # Check if port is vulnerable: 12 spaces (inside inner for loop)
+            if 'OPEN' in state and port in VULNERABILITY_DB:
+                # Add vulnerability: 16 spaces (inside the if)
                 vuln = VULNERABILITY_DB[port].copy()
                 vuln['host'] = host
                 vuln['port'] = port
                 vulnerabilities[vuln['severity']].append(vuln)
     
-    # Check if any vulnerabilities found
+    # Count total (OUTSIDE loops): 4 spaces
     total_vulns = sum(len(v) for v in vulnerabilities.values())
     
     if total_vulns == 0:
@@ -2047,4 +2067,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
