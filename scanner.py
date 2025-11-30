@@ -8,17 +8,19 @@ Date: November 27th, 2025
 Multi threaded port scanner with service detection, OS fingerprinting,
 and vulnerability assessment. Supports SYN/ACK/FIN/RST/Connect scans.
 
-Dependencies: Python 3.10, scapy, rich, pyfiglet
-Install Command: pip install scapy rich pyfiglet
+Dependencies: Python 3.10, scapy, rich, pyfiglet, nvdlib
+Install Command: pip install scapy rich pyfiglet, nvdlib
 
 Usage:
     python scanner.py -h
-    python scanner.py -a 192.168.1.1 -sS --portList common -sv
+    python scanner.py -a 192.168.1.1 -sS --portList common
+    python scanner.py -a 192.168.1.1 -sC --portList common -sv -show-vulns
 
 Features:
     - Connect and Scapy-based scans
-    - Optional ping sweep and TUI wizard
+    - Optional ping sweep and Interactive scan input
     - TXT/CSV reporting with basic vulnerability hints
+    - CVE querying for known vulnerabilities
 """
 
 
@@ -44,8 +46,7 @@ from rich.table import Table
 from rich.text import Text
 from scapy.all import *
 from scapy.layers.inet import IP, ICMP, TCP
-
-
+from scapy.layers.l2 import Ether, ARP
 
 # Task5: Simultaneous scanning – shared state for threaded progress
 threadLock = threading.Lock() # Prevent race conditions in progress updates
@@ -367,7 +368,6 @@ def textual_interface():
         "rst": "RST Scan (-sR)",
         "fin": "FIN Scan (-sF)",
         "connect": "Connect Scan (-sC)",
-        "arpping": "ARP Ping (-aP)"
     }
 
     scan_table = Table(title="Scan Types")
@@ -493,14 +493,7 @@ def parse_arguments():
         const='connect',
         help='connect scan \\ vannila scan'
     )
-    groupScan.add_argument(
-        '-aP', 
-        action='store_const',
-        dest='scanType',
-        const='arpping',
-        help='arp ping'
-    )
-    
+
     parser.add_argument(
     "-a", "--address", 
     action='store', 
@@ -1251,6 +1244,9 @@ def osDetection(hostOutput, host):
 
 #EXTRA "Scapy Scanning - Individual Port Scanner"
 def scanPort(host, scanningPort, flag, scanType):
+
+
+
         state = 'UNKNOWN'
         service = common_ports_dict.get(scanningPort, wellKnownPorts.get(scanningPort, 'TCP/UDP'))
 
@@ -1290,17 +1286,16 @@ def scanPort(host, scanningPort, flag, scanType):
 def scapyScan(host, ports, scanType, progress, taskID):
     results = []
     flag = {'syn':'S','ack':'A','rst':'R','fin':'F'}.get(scanType, '')
-
-    with ProcessPoolExecutor(max_workers=20) as executor:
-        futures = [executor.submit(scanPort, host, p, flag, scanType) for p in ports]
-        for fut in futures:
-            result = fut.result()
-            results.append(result)
-            # update progress here in parent
-            progress.update(taskID, advance=1)
+    if checkHostStatus(host) == 0:
+        with ProcessPoolExecutor(max_workers=20) as executor:
+            futures = [executor.submit(scanPort, host, p, flag, scanType) for p in ports]
+            for fut in futures:
+                result = fut.result()
+                results.append(result)
+                # update progress here in parent
+                progress.update(taskID, advance=1)
 
     return results
-
 
 # Task2: Scan modes – build port lists for each mode
 def getPorts(portMode, numberOfHosts, start, end, threads,scanType, inputPorts = None):
@@ -1365,8 +1360,7 @@ def validate_ports(ports, args):
               f"[!] Total ports to scan: {len(ports)}"))
         print(stringInColor(Color.YELLOW, 
               "[!] This may trigger IDS/IPS alerts or security monitoring!"))
-        input(stringInColor(Color.YELLOW,
-                    "Press any key to continue SCANNING"))
+
 
 
         # Check for particularly sensitive ports
@@ -1448,8 +1442,6 @@ def validate_ports(ports, args):
                 print(f"  {stringInColor(Color.GREEN, '✓ Recommendation:')} {info['recommendation']}")
         
         print("\n" + "="*70 + "\n")
-        input(stringInColor(Color.YELLOW,
-                            "Are you still sure you wanna continue SCANNING?"))
         print('\n\n')
 
 def validate_open_ports(finalOutput, args):
@@ -1950,6 +1942,8 @@ def main():
             os = osDetection(sorted_results, host)
             progress.update(taskID, advance=1)
 
+        if args.scanType == 'arpping':
+
 
 
 
@@ -2023,8 +2017,9 @@ def main():
                     return item
                 else:
                     return Text(str(item))
-            product, version = extractProductVersion(row[3])
-            row[3] = f"{safe_render(product)} {safe_render(version)}"
+            if num_cols > 3:
+                product, version = extractProductVersion(row[3])
+                row[3] = f"{safe_render(product)} {safe_render(version)}"
             state = row[2]
             if state in style_map:
                 style, displays = style_map[state]
@@ -2048,11 +2043,6 @@ def main():
      # Save results to file if requested
     if args.output_file or args.output_format != 'txt':
         outputFile(scanStart, final, args)
-
-
-
-
-
 
 
 if __name__ == "__main__":
