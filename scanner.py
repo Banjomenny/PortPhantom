@@ -1911,8 +1911,7 @@ def main():
         total_port_count = len(ports) if ports else 0
 
     total_ports = len(hosts) * total_port_count
-    total_work = total_ports + len(hosts)
-
+    total_work = total_ports * len(hosts)
     final = {host: [] for host in hosts}
     with Progress(
         TextColumn("[bold blue]{task.description}"),
