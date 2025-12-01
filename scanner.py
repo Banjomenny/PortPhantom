@@ -1961,7 +1961,7 @@ def main():
             os = osDetection(sorted_results, host)
             progress.update(taskID, advance=1)
 
-        if args.scanType == 'arpping':
+
 
 
 
