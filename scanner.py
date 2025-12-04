@@ -1,9 +1,7 @@
 """
 Network Port Scanner - Final Project
 
-Authors: Benjamin and Joshua (Team BenNjosh)
-Course: INFO-3128 Scripting for Security
-Date: November 27th, 2025
+
 
 Multi threaded port scanner with service detection, OS fingerprinting,
 and vulnerability assessment. Supports SYN/ACK/FIN/RST/Connect scans.
