@@ -887,7 +887,7 @@ def queryCpe(cpe=None, product=None, version=None):
     try:
 
         if cpe and cpe.lower() != "unknown":
-            results = nvdlib.searchCVE(cpeName=cpe, key="0eab28a9-ae73-40c0-9b7d-ae587f8a152b")
+            results = nvdlib.searchCVE(cpeName=cpe")
 
 
         if not results and product and version:
