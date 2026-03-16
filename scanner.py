@@ -24,15 +24,17 @@ Features:
 
 # Core networking, concurrency, and CLI libraries
 import ipaddress
+import re
 import sys
-import os      
-import time     
-import socket    
-import threading 
+import os
+import time
+import socket
+import threading
 import argparse
 import nvdlib
-from enum import Enum  
-from concurrent.futures import ProcessPoolExecutor 
+from enum import Enum
+from collections import defaultdict
+from concurrent.futures import ProcessPoolExecutor
 
 import pyfiglet
 from rich.align import Align
@@ -297,7 +299,7 @@ def stringInColor(color,text ):
      4: "\033[0;34m",
      5: "\033[0;35m",
      6: "\033[0;36m",
-     7: "\0333[0;37m",
+     7: "\033[0;37m",
      8: "\033[1;32m",
      9: "\033[1;31m",
      10: "\033[1;37m",
@@ -574,10 +576,10 @@ def parse_arguments():
 
 # Task3: Custom port lists – parse user specified ports
 def parsePort(input):
-    portsstr = None
+    if not input:
+        return []
     ports = []
-    if input:
-        portsstr = input.split(',')
+    portsstr = input.split(',')
     for port in portsstr:
         try:
             ports.append(int(port))
@@ -647,7 +649,7 @@ def scan_port_connect(target, port, ifServiceScan):
     try:
 
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(2) # Set a 500ms timeout for an attempted connection
+        sock.settimeout(2) # Set a 2s timeout for an attempted connection
         result = sock.connect_ex((target, port))
 
         banner = ""
@@ -949,8 +951,6 @@ def rateVulnerabilities(vulns):
 EXTRA: makes the output look nice
     handles all output and outputting to user
 """
-from collections import defaultdict
-
 def build_report(hosts_data):
     report = {}
     severity_order = ["LOW", "MEDIUM", "HIGH", "CRITICAL"]
@@ -973,14 +973,6 @@ def build_report(hosts_data):
 
     return report
 
-
-    return report
-
-from rich.console import Console
-from rich.table import Table
-
-console = Console()
-
 def getSeverity(score):
     if score is None:
         return None
@@ -993,11 +985,6 @@ def getSeverity(score):
     elif score > 0.0:
         return "LOW"
     return None
-
-from rich.console import Console
-from rich.table import Table
-
-console = Console()
 
 def severity_color(severity: str) -> str:
     if severity == "CRITICAL":
@@ -1909,7 +1896,7 @@ def main():
         total_port_count = len(ports) if ports else 0
 
     total_ports = len(hosts) * total_port_count
-    total_work = total_ports * len(hosts)
+    total_work = total_ports
     final = {host: [] for host in hosts}
     with Progress(
         TextColumn("[bold blue]{task.description}"),
@@ -1956,7 +1943,7 @@ def main():
             sorted_results = sorted(final[host], key=lambda x: x[0])
 
             ##EXTRA Perform OS detection 
-            os = osDetection(sorted_results, host)
+            detected_os = osDetection(sorted_results, host)
             progress.update(taskID, advance=1)
 
 
@@ -1966,14 +1953,14 @@ def main():
 
 
             # Store OS result for display later
-            final[host].insert(0, {'os': os})  # Store OS at beginning of results
+            final[host].insert(0, {'os': detected_os})  # Store OS at beginning of results
 
     hostsData = defaultdict(lambda: defaultdict(list))
     for host in final.keys():
         vulns = []
         # Extract OS from stored results
         os_info = final[host][0] if final[host] and isinstance(final[host][0], dict) else {'os': 'Unknown'}
-        os = os_info.get('os', 'Unknown')
+        detected_os = os_info.get('os', 'Unknown')
         
         # Get actual port results (skip the OS dict we inserted)
         sorted_results = [r for r in final[host] if not isinstance(r, dict)]
@@ -1981,7 +1968,7 @@ def main():
 
 
 
-        console.print(f"\n [bold purple]Host:[/bold purple] [bold blue]{host} -> OS: {os}[/bold blue]")
+        console.print(f"\n [bold purple]Host:[/bold purple] [bold blue]{host} -> OS: {detected_os}[/bold blue]")
 
         if not sorted_results:
             continue
