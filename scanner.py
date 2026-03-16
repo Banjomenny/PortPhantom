@@ -30,12 +30,11 @@ import sys
 import os
 import time
 import socket
-import threading
 import argparse
 import nvdlib
 from enum import Enum
 from collections import defaultdict
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pyfiglet
 from rich.align import Align
@@ -49,9 +48,7 @@ from scapy.all import *
 from scapy.layers.inet import IP, ICMP, TCP
 from scapy.layers.l2 import Ether, ARP
 
-# Task5: Simultaneous scanning – shared state for threaded progress
-threadLock = threading.Lock() # Prevent race conditions in progress updates
-portScanned = 0
+console = Console()
 
 
 
@@ -627,17 +624,6 @@ def getIPaddresses(address, threads):
         except Exception:
             sys.exit("Invalid Host")
 
-# Task5: Simultaneous scanning – multi host worker function
-
-def scan_port_with_progress(target, port, ifServiceScan, progress, taskID):
-    result = scan_port_connect(target, port, ifServiceScan)
-    global portScanned
-    with threadLock:
-        portScanned += 1
-        progress.update(taskID, completed=portScanned)
-
-    return result
-
 #Task9 "Service Detection"
 
 def scan_port_connect(target, port, ifServiceScan):
@@ -646,8 +632,6 @@ def scan_port_connect(target, port, ifServiceScan):
     :param port: port to scan
     :return: state of port
     '''
-    global portScanned
-
     sock = None
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -742,44 +726,6 @@ def scan_port_connect(target, port, ifServiceScan):
     finally:
         if sock:
             sock.close()
-
-# Task 5: multi host threading
-# Distribute hosts across threads and collect results
-def busybeeIFMultipleHosts(hosts, ports, delay, groupedResults, index, ifServiceScan, progress, taskID):
-    
-    """
-    Scan multiple hosts concurrently and store results per thread.
-    """
-    # multiplies threads and delays to allow the user to have a precise delay so threads are staggered so the packet only gets sent so often
-
-
-    for host in hosts:
-        local = []
-        target = host
-        if isinstance(ports, list):
-            for port in ports:
-                local.append(scan_port_with_progress(target, port, ifServiceScan, progress,taskID))
-
-        else:
-            local.append(scan_port_with_progress(target, ports, ifServiceScan, progress, taskID))
-        groupedResults[index] = local
-
-
-# Task5: Single host threading – split ports across threads
-def busyBeeIFOneHost(hosts, ports, delay, groupedResults, index, ifServiceScan, progress,taskID):
-    """
-    Scan one host with port ranges split between threads.
-    """
-
-    local = []
-    target = hosts[0]
-    if isinstance(ports, list):
-        for port in ports:
-            local.append(scan_port_with_progress(target, port, ifServiceScan, progress, taskID))
-
-    else:
-        local.append(scan_port_with_progress(target, ports, ifServiceScan, progress, taskID))
-    groupedResults[index] = local
 
 # Task6: Logging and reporting – save results to CSV
 def save_as_csv(fileName, finalOutput, args):
@@ -1236,58 +1182,81 @@ def osDetection(hostOutput, host):
             OS = f'Unknown OS'
     return OS
 
-#EXTRA "Scapy Scanning - Individual Port Scanner"
-def scanPort(host, scanningPort, flag, scanType):
+#EXTRA "Scapy Scanning - Batch Port Scanner"
+def classify_scapy_response(tcp_layer, scanType):
+    """Determine port state from a TCP response based on scan type."""
+    if not tcp_layer:
+        return 'UNKNOWN'
+    if scanType == 'syn':
+        if tcp_layer.flags == 0x12:
+            return 'OPEN'
+        elif tcp_layer.flags == 0x14:
+            return 'CLOSED'
+    elif scanType == 'ack':
+        if tcp_layer.flags == 0x14:
+            return 'UNFILTERED'
+    elif scanType in ('rst', 'fin'):
+        return 'CLOSED' if tcp_layer.flags == 0x14 else 'OPEN|FILTERED'
+    return 'UNKNOWN'
 
 
-
-        state = 'UNKNOWN'
-        service = common_ports_dict.get(scanningPort, wellKnownPorts.get(scanningPort, 'TCP/UDP'))
-
-        try:
-            ans, unans = sr(IP(dst=host) / TCP(dport=scanningPort, flags=flag), timeout=2, verbose=0)
-        except Exception:
-            return [scanningPort, service, state]
-
-        if ans:
-            for snd, rcv in ans:
-                tcp = rcv.getlayer(TCP)
-                if tcp:
-                    if scanType == 'syn':
-                        if tcp.flags == 0x12: # Syn-Ack received
-                            state = 'OPEN'
-                            sr(IP(dst=host) / TCP(dport=scanningPort, flags="R"), timeout=1, verbose=0)
-                        elif tcp.flags == 0x14: # Rst received
-                            state = 'CLOSED'
-                    elif scanType == 'ack':
-                        if tcp.flags == 0x14:
-                            state = "UNFILTERED"
-                    elif scanType == 'rst':
-                        state = "CLOSED" if tcp.flags == 0x14 else "OPEN|FILTERED"
-                    elif scanType == 'fin':
-                        state = "CLOSED" if tcp.flags == 0x14 else "OPEN|FILTERED"
-        else:
-            match scanType:
-                case 'syn' | 'ack':
-                    state = 'FILTERED'
-                case 'rst' | 'fin':
-                    state = 'OPEN|FILTERED'
-
-        return [scanningPort, service, state]
+def no_response_state(scanType):
+    """Default state when no response is received."""
+    if scanType in ('syn', 'ack'):
+        return 'FILTERED'
+    return 'OPEN|FILTERED'
 
 
-# EXTRA: Parallel Scapy scan over multiple ports
 def scapyScan(host, ports, scanType, progress, taskID):
+    """Batch scapy scan — sends all probes at once, single timeout window."""
     results = []
-    flag = {'syn':'S','ack':'A','rst':'R','fin':'F'}.get(scanType, '')
-    if checkHostStatus(host) == 0:
-        with ProcessPoolExecutor(max_workers=20) as executor:
-            futures = [executor.submit(scanPort, host, p, flag, scanType) for p in ports]
-            for fut in futures:
-                result = fut.result()
-                results.append(result)
-                # update progress here in parent
-                progress.update(taskID, advance=1)
+    flag = {'syn': 'S', 'ack': 'A', 'rst': 'R', 'fin': 'F'}.get(scanType, '')
+
+    if checkHostStatus(host) != 0:
+        # Host is down, mark all ports and advance progress
+        for p in ports:
+            service = common_ports_dict.get(p, wellKnownPorts.get(p, 'TCP/UDP'))
+            results.append([p, service, 'FILTERED'])
+            progress.update(taskID, advance=1)
+        return results
+
+    try:
+        # Send all probes in one batch — single timeout window
+        ans, unans = sr(
+            IP(dst=host) / TCP(dport=ports, flags=flag),
+            timeout=2, verbose=0
+        )
+    except Exception:
+        for p in ports:
+            service = common_ports_dict.get(p, wellKnownPorts.get(p, 'TCP/UDP'))
+            results.append([p, service, 'UNKNOWN'])
+            progress.update(taskID, advance=1)
+        return results
+
+    # Build lookup of responded ports
+    responded = {}
+    rst_ports = []
+    for snd, rcv in ans:
+        tcp = rcv.getlayer(TCP)
+        if tcp:
+            port = snd[TCP].dport
+            state = classify_scapy_response(tcp, scanType)
+            responded[port] = state
+            # For SYN scan, send RST to open ports to clean up half-open connections
+            if scanType == 'syn' and state == 'OPEN':
+                rst_ports.append(port)
+
+    # Batch-send RST packets for open ports (SYN scan cleanup)
+    if rst_ports:
+        send(IP(dst=host) / TCP(dport=rst_ports, flags="R"), verbose=0)
+
+    # Build final results for all ports
+    default_state = no_response_state(scanType)
+    for p in ports:
+        service = common_ports_dict.get(p, wellKnownPorts.get(p, 'TCP/UDP'))
+        state = responded.get(p, default_state)
+        results.append([p, service, state])
+        progress.update(taskID, advance=1)
 
     return results
 
@@ -1322,26 +1291,13 @@ def getPorts(portMode, numberOfHosts, start, end, threads,scanType, inputPorts =
             case _:
                 listOfPorts =list(range(1, 1025))
 
-        if numberOfHosts == 1 and scanType == 'connect':
-            temp = [[] for i in range(threads)]
-            for i in range(len(listOfPorts)):
-                temp[i % threads].append(listOfPorts[i])
-            return temp
-
-        else:
-            return listOfPorts
+        return listOfPorts
 
 #Task8 "Port Range Validation"
 def validate_ports(ports, args):
     """
     Warn before scanning many well-known or sensitive ports.
     """
-    if ports and isinstance(ports[0], list):
-        flat_ports = []
-        for sublist in ports:
-            flat_ports.extend(sublist)
-        ports = flat_ports
-    
     well_known = [p for p in ports if p < 1024]
     
     if well_known:
@@ -1869,19 +1825,12 @@ def main():
     else:
         hosts = flatHosts
     ports = getPorts(args.portMode, len(hosts), args.start, args.end, args.threads,args.scanType, args.port)
-    validate_ports(ports if isinstance(ports, list) else ports[0], args)
+    validate_ports(ports, args)
 
     if len(hosts) == 0:
         sys.exit('no hosts to scan')
 
-    # Flatten ports if they were split into per-thread chunks
-    if ports and isinstance(ports[0], list):
-        flat_ports = []
-        for sublist in ports:
-            flat_ports.extend(sublist)
-    else:
-        flat_ports = list(ports) if ports else []
-
+    flat_ports = list(ports) if ports else []
     total_work = len(hosts) * len(flat_ports)
     final = {host: [] for host in hosts}
     with Progress(
@@ -1909,11 +1858,18 @@ def main():
                     progress.update(taskID, advance=1)
             final = output(hosts, [all_results], args.servicescan)
         elif args.scanType in ['syn','ack','fin','rst']:
-            if isinstance(hosts, list):
-                for host in hosts:
-                    final[host] = scapyScan(host, flat_ports, args.scanType, progress, taskID)
-            elif isinstance(hosts, str):
-                final[hosts] = scapyScan(hosts, flat_ports, args.scanType, progress, taskID)
+            scan_hosts = hosts if isinstance(hosts, list) else [hosts]
+            if len(scan_hosts) == 1:
+                final[scan_hosts[0]] = scapyScan(scan_hosts[0], flat_ports, args.scanType, progress, taskID)
+            else:
+                with ThreadPoolExecutor(max_workers=min(len(scan_hosts), 8)) as executor:
+                    futures = {
+                        executor.submit(scapyScan, h, flat_ports, args.scanType, progress, taskID): h
+                        for h in scan_hosts
+                    }
+                    for fut in as_completed(futures):
+                        h = futures[fut]
+                        final[h] = fut.result()
 
 
 
