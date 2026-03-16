@@ -24,15 +24,18 @@ Features:
 
 # Core networking, concurrency, and CLI libraries
 import ipaddress
+import re
+import subprocess
 import sys
-import os      
-import time     
-import socket    
-import threading 
+import os
+import time
+import socket
+import threading
 import argparse
 import nvdlib
-from enum import Enum  
-from concurrent.futures import ProcessPoolExecutor 
+from enum import Enum
+from collections import defaultdict
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 
 import pyfiglet
 from rich.align import Align
@@ -287,7 +290,6 @@ def stringInColor(color,text ):
     '''
     Wrap text in ANSI colour codes for terminal output.
     '''
-    os.system("color")
     RESET = '\033[0m'
     COLORS = {
      0: "\033[0;30m",
@@ -297,7 +299,7 @@ def stringInColor(color,text ):
      4: "\033[0;34m",
      5: "\033[0;35m",
      6: "\033[0;36m",
-     7: "\0333[0;37m",
+     7: "\033[0;37m",
      8: "\033[1;32m",
      9: "\033[1;31m",
      10: "\033[1;37m",
@@ -307,17 +309,15 @@ def stringInColor(color,text ):
 #EXTRA "Checks if host is online"
 def checkHostStatus(hostname):
     platform = os.name
-    response = ""
     match platform:
         case 'posix':
-            ping_command = f"ping -c 1 {hostname}"
-            response = os.system(f"{ping_command} > /dev/null 2>&1")
+            cmd = ["ping", "-c", "1", hostname]
         case 'nt':
-            ping_command = f"ping -n 1 {hostname}"
-            response = os.system(f"{ping_command} > NUL")
+            cmd = ["ping", "-n", "1", hostname]
         case _:
             return 1
-    return response
+    result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return result.returncode
 
 #EXTRA "Interactive text based UI"
 def textual_interface():
@@ -574,10 +574,10 @@ def parse_arguments():
 
 # Task3: Custom port lists – parse user specified ports
 def parsePort(input):
-    portsstr = None
+    if not input:
+        return []
     ports = []
-    if input:
-        portsstr = input.split(',')
+    portsstr = input.split(',')
     for port in portsstr:
         try:
             ports.append(int(port))
@@ -596,17 +596,23 @@ def getIPaddresses(address, threads):
 
     if '/' in address: #CIDR notation detected
         try:
-            network = ipaddress.ip_network(address).hosts()
+            network = ipaddress.ip_network(address, strict=False).hosts()
             hosts = [str(ip) for ip in network]
             return hosts
-        except:
+        except Exception:
             sys.exit('invalid CIDR notation')
     elif '-' in address: #Range notation detected
         try:
             segments = address.split('.')
+            if len(segments) != 4:
+                sys.exit("Invalid IP format: expected x.x.x.x-y")
+            for octet in segments[:3]:
+                val = int(octet)
+                if val < 0 or val > 255:
+                    sys.exit(f"Invalid octet value: {val}")
             hostRange = segments[3].split('-')
             for i in range(int(hostRange[0]), int(hostRange[1]) + 1 ):
-               if i > 255:
+               if i < 0 or i > 255:
                    sys.exit("invalid Octet")
                hosts.append(f"{segments[0]}.{segments[1]}.{segments[2]}.{i}")
             return hosts
@@ -618,8 +624,7 @@ def getIPaddresses(address, threads):
         try:
             hosts.append(address)
             return hosts
-        except:
-            print("you get an error")
+        except Exception:
             sys.exit("Invalid Host")
 
 # Task5: Simultaneous scanning – multi host worker function
@@ -641,18 +646,17 @@ def scan_port_connect(target, port, ifServiceScan):
     :param port: port to scan
     :return: state of port
     '''
-    """Simple port scanner -- checks if the port is actually open"""
     global portScanned
 
+    sock = None
     try:
-
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(2) # Set a 500ms timeout for an attempted connection
+        sock.settimeout(2) # Set a 2s timeout for an attempted connection
         result = sock.connect_ex((target, port))
 
         banner = ""
 
-        if ifServiceScan:
+        if ifServiceScan and result == 0:
                 if port in [21, 22, 23, 25, 110, 143, 3306, 5432, 6379, 6667]:
                     try:
                         banner = sock.recv(4096).decode(errors='ignore')
@@ -660,7 +664,7 @@ def scan_port_connect(target, port, ifServiceScan):
                         if not banner and port == 25:
                             sock.sendall(b"EHLO scanner.local\r\n")
                             banner = sock.recv(4096).decode(errors='ignore')
-                    except:
+                    except Exception:
                         banner = "NO BANNER"
                 elif port in [80, 8080, 8888, 9000, 9200, 10000]:
                     probe = f"GET / HTTP/1.1\r\nHost: {target}\r\nConnection: close\r\n\r\n"
@@ -678,27 +682,28 @@ def scan_port_connect(target, port, ifServiceScan):
                                 break
                         raw = ''.join(response) if response else None
 
-                        headers, _, body = raw.partition("\r\n\r\n")
+                        if raw:
+                            headers, _, body = raw.partition("\r\n\r\n")
 
-
-                        # Grab the Server line
-                        for line in headers.splitlines():
-                            line = line.strip()
-                            if line.lower().startswith("server:"):
-
-                                banner = line
-                                break
+                            # Grab the Server line
+                            for line in headers.splitlines():
+                                line = line.strip()
+                                if line.lower().startswith("server:"):
+                                    banner = line
+                                    break
+                            else:
+                                banner = headers.splitlines()[0]
                         else:
-                            banner = headers.splitlines()[0]
+                            banner = "NO BANNER"
 
                     except Exception:
                         banner = "NO BANNER"
         service = 'UNKNOWN'
         banner = banner.strip()
 
-        if port in common_ports_dict.keys():
+        if port in common_ports_dict:
             service = common_ports_dict[port]
-        elif port in wellKnownPorts.keys():
+        elif port in wellKnownPorts:
             service = wellKnownPorts[port]
         else:
             service = 'TCP/UDP'
@@ -718,7 +723,7 @@ def scan_port_connect(target, port, ifServiceScan):
                 'service': service,
                 'state': 'OPEN' if result == 0 else 'CLOSED'
             }
-    except:
+    except Exception:
         if ifServiceScan:
                return {
                 'host': target,
@@ -734,6 +739,9 @@ def scan_port_connect(target, port, ifServiceScan):
                 'service': 'ERROR',
                 'state': 'ERROR'
             }
+    finally:
+        if sock:
+            sock.close()
 
 # Task 5: multi host threading
 # Distribute hosts across threads and collect results
@@ -889,10 +897,11 @@ def queryCpe(cpe=None, product=None, version=None):
 
 
         if not results and product and version:
-            results = nvdlib.searchCVE(
-                keywordSearch=f"{product} {version}",
-                key="0eab28a9-ae73-40c0-9b7d-ae587f8a152b"
-            )
+            kwargs = {"keywordSearch": f"{product} {version}"}
+            api_key = os.environ.get("NVD_API_KEY")
+            if api_key:
+                kwargs["key"] = api_key
+            results = nvdlib.searchCVE(**kwargs)
 
         # Parse results
         for r in results:
@@ -949,8 +958,6 @@ def rateVulnerabilities(vulns):
 EXTRA: makes the output look nice
     handles all output and outputting to user
 """
-from collections import defaultdict
-
 def build_report(hosts_data):
     report = {}
     severity_order = ["LOW", "MEDIUM", "HIGH", "CRITICAL"]
@@ -973,14 +980,6 @@ def build_report(hosts_data):
 
     return report
 
-
-    return report
-
-from rich.console import Console
-from rich.table import Table
-
-console = Console()
-
 def getSeverity(score):
     if score is None:
         return None
@@ -993,11 +992,6 @@ def getSeverity(score):
     elif score > 0.0:
         return "LOW"
     return None
-
-from rich.console import Console
-from rich.table import Table
-
-console = Console()
 
 def severity_color(severity: str) -> str:
     if severity == "CRITICAL":
@@ -1206,7 +1200,9 @@ def osDetection(hostOutput, host):
         for result in hostOutput:
             if len(result) >= 4:
                 port, service, state, banner = result
-                
+                if not banner:
+                    continue
+
                 for distro in linux_distros:
                     if distro.lower() in banner.lower():
                         return f"Linux ({distro})"
@@ -1316,7 +1312,7 @@ def getPorts(portMode, numberOfHosts, start, end, threads,scanType, inputPorts =
             case 'web':
                 listOfPorts = [80,443,8080,8443,8888,9000,9200,10000]
             case 'database':
-                listOfPorts = [1433,1521,3306,5432,27017,6479]
+                listOfPorts = [1433,1521,3306,5432,27017,6379]
             case 'mail':
                 listOfPorts = [25,465,587,110,995,143,993]
             case 'remoteAccess':
@@ -1824,7 +1820,7 @@ def main():
                     if args.end < 1 or args.end > 65535:
                         raise ValueError
             except ValueError:
-                print("Please enter a valid port number")
+                sys.exit("Please enter a valid port number")
 
 
 
@@ -1875,41 +1871,18 @@ def main():
     ports = getPorts(args.portMode, len(hosts), args.start, args.end, args.threads,args.scanType, args.port)
     validate_ports(ports if isinstance(ports, list) else ports[0], args)
 
-    #Calculate optimal number of threads based on the hosts and ports
-    groupedResults = [[] for i in range(args.threads)]
-    threads = []
-    threadCount = args.threads
-    if (len(hosts) > 1):
-        if len(hosts) < args.threads:
-            #Single host mode
-            threadCount = len(hosts)
-
-    if (len(ports) > 1):
-        if len(ports) < args.threads:
-            threadCount = len(ports)
-    hostChunks = []
-
     if len(hosts) == 0:
         sys.exit('no hosts to scan')
 
-    if len(hosts) > 1:
-
-        hostChunks = [[] for i in range(threadCount)]
-        for i in range(len(hosts)):
-            hostChunks[i % threadCount].append(hosts[i])
-
-    # Calculate total work: port scans + OS detection per host
-    # Handle case where ports is list of lists (single host, multi-threaded)
+    # Flatten ports if they were split into per-thread chunks
     if ports and isinstance(ports[0], list):
         flat_ports = []
         for sublist in ports:
             flat_ports.extend(sublist)
-        total_port_count = len(flat_ports)
     else:
-        total_port_count = len(ports) if ports else 0
+        flat_ports = list(ports) if ports else []
 
-    total_ports = len(hosts) * total_port_count
-    total_work = total_ports * len(hosts)
+    total_work = len(hosts) * len(flat_ports)
     final = {host: [] for host in hosts}
     with Progress(
         TextColumn("[bold blue]{task.description}"),
@@ -1922,33 +1895,25 @@ def main():
         taskID = progress.add_task("Scanning all hosts", total=total_work)
 
         if args.scanType == 'connect':
-            for t in range(threadCount):
-                if len(hosts) == 1:
-                    thread = threading.Thread(target=busyBeeIFOneHost, args=(
-                    hosts, ports[t], args.delay, groupedResults, t, args.servicescan, progress, taskID))
-                    threads.append(thread)
-                else:
-                    thread = threading.Thread(target=busybeeIFMultipleHosts, args=(
-                    hostChunks[t], ports, args.delay, groupedResults, t, args.servicescan, progress, taskID))
-                    threads.append(thread)
-
-            for t in threads:
-                t.start()
-            for t in threads:
-                t.join()
+            all_results = []
+            max_workers = min(args.threads, len(flat_ports) * len(hosts)) or 1
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {}
+                for host in hosts:
+                    for port in flat_ports:
+                        fut = executor.submit(scan_port_connect, host, port, args.servicescan)
+                        futures[fut] = (host, port)
+                for fut in as_completed(futures):
+                    result = fut.result()
+                    all_results.append(result)
+                    progress.update(taskID, advance=1)
+            final = output(hosts, [all_results], args.servicescan)
         elif args.scanType in ['syn','ack','fin','rst']:
             if isinstance(hosts, list):
                 for host in hosts:
-                    final[host] = scapyScan(host, ports, args.scanType, progress, taskID)
+                    final[host] = scapyScan(host, flat_ports, args.scanType, progress, taskID)
             elif isinstance(hosts, str):
-                final[hosts] = scapyScan(hosts, ports, args.scanType, progress, taskID)
-
-        scannedHosts = set()
-        for group in groupedResults:
-            for result in group:
-                scannedHosts.add(result.get('host'))
-        if args.scanType == 'connect':
-            final = output(scannedHosts, groupedResults, args.servicescan)
+                final[hosts] = scapyScan(hosts, flat_ports, args.scanType, progress, taskID)
 
 
 
@@ -1956,7 +1921,7 @@ def main():
             sorted_results = sorted(final[host], key=lambda x: x[0])
 
             ##EXTRA Perform OS detection 
-            os = osDetection(sorted_results, host)
+            detected_os = osDetection(sorted_results, host)
             progress.update(taskID, advance=1)
 
 
@@ -1966,14 +1931,14 @@ def main():
 
 
             # Store OS result for display later
-            final[host].insert(0, {'os': os})  # Store OS at beginning of results
+            final[host].insert(0, {'os': detected_os})  # Store OS at beginning of results
 
     hostsData = defaultdict(lambda: defaultdict(list))
     for host in final.keys():
         vulns = []
         # Extract OS from stored results
         os_info = final[host][0] if final[host] and isinstance(final[host][0], dict) else {'os': 'Unknown'}
-        os = os_info.get('os', 'Unknown')
+        detected_os = os_info.get('os', 'Unknown')
         
         # Get actual port results (skip the OS dict we inserted)
         sorted_results = [r for r in final[host] if not isinstance(r, dict)]
@@ -1981,7 +1946,7 @@ def main():
 
 
 
-        console.print(f"\n [bold purple]Host:[/bold purple] [bold blue]{host} -> OS: {os}[/bold blue]")
+        console.print(f"\n [bold purple]Host:[/bold purple] [bold blue]{host} -> OS: {detected_os}[/bold blue]")
 
         if not sorted_results:
             continue
@@ -1992,25 +1957,52 @@ def main():
             headers[3] = "Banner"
 
             if args.show_vulns:
+                # Build list of CVE query tasks
+                cve_tasks = []
                 for row in sorted_results:
                     banner = row[3]
                     if not banner or banner.strip().upper() == "NO BANNER":
                         continue
 
                     result = parseBanner(banner)
-                    if not result["vendor"] == "Unknown":
+                    if result["vendor"] != "Unknown":
                         cpe = buildCpe(result["vendor"], result["product"], result["version"])
                     else:
                         cpe = "Unknown"
                     product, version = extractProductVersion(row[3])
+                    cve_tasks.append((cpe, product, version, row[1]))
 
-                    vulns = queryCpe(cpe, product, version)
-                    for v in vulns:
-                        hostsData[host][row[1]].append(v)
+                # Run CVE queries in parallel
+                if cve_tasks:
+                    with ThreadPoolExecutor(max_workers=min(8, len(cve_tasks))) as executor:
+                        futures = {
+                            executor.submit(queryCpe, cpe, prod, ver): svc_name
+                            for cpe, prod, ver, svc_name in cve_tasks
+                        }
+                        for fut in as_completed(futures):
+                            svc_name = futures[fut]
+                            for v in fut.result():
+                                hostsData[host][svc_name].append(v)
 
         table = Table(show_header=True, header_style="bold blue")
         for h in headers:
             table.add_column(h, justify="right" if h in ["Port", "State"] else "left")
+
+        style_map = {
+            "OPEN": ("bold green", ["all", "open"]),
+            "CLOSED": ("bold red", ["all", "closed"]),
+            "FILTERED": ("bold yellow", ["all", "open", "closed"]),
+            "UNFILTERED": ("bold green", ["all", "open", "closed"]),
+            "OPEN|FILTERED": ("bold green", ["all", "open", "closed"]),
+        }
+
+        def safe_render(item):
+            if item is None:
+                return ""
+            elif isinstance(item, Text):
+                return item
+            else:
+                return Text(str(item))
 
         seen = set()
         for row in sorted_results:
@@ -2019,21 +2011,6 @@ def main():
                 continue
             seen.add(port)
 
-            style_map = {
-                "OPEN": ("bold green", ["all", "open"]),
-                "CLOSED": ("bold red", ["all", "closed"]),
-                "FILTERED": ("bold yellow", ["all", "open", "closed"]),
-                "UNFILTERED": ("bold green", ["all", "open", "closed"]),
-                "OPEN|FILTERED": ("bold green", ["all", "open", "closed"]),
-            }
-
-            def safe_render(item):
-                if item is None:
-                    return ""
-                elif isinstance(item, Text):
-                    return item
-                else:
-                    return Text(str(item))
             if num_cols > 3:
                 product, version = extractProductVersion(row[3])
                 row[3] = f"{safe_render(product)} {safe_render(version)}"
