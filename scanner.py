@@ -25,6 +25,7 @@ Features:
 # Core networking, concurrency, and CLI libraries
 import ipaddress
 import re
+import subprocess
 import sys
 import os
 import time
@@ -289,7 +290,6 @@ def stringInColor(color,text ):
     '''
     Wrap text in ANSI colour codes for terminal output.
     '''
-    os.system("color")
     RESET = '\033[0m'
     COLORS = {
      0: "\033[0;30m",
@@ -309,17 +309,15 @@ def stringInColor(color,text ):
 #EXTRA "Checks if host is online"
 def checkHostStatus(hostname):
     platform = os.name
-    response = ""
     match platform:
         case 'posix':
-            ping_command = f"ping -c 1 {hostname}"
-            response = os.system(f"{ping_command} > /dev/null 2>&1")
+            cmd = ["ping", "-c", "1", hostname]
         case 'nt':
-            ping_command = f"ping -n 1 {hostname}"
-            response = os.system(f"{ping_command} > NUL")
+            cmd = ["ping", "-n", "1", hostname]
         case _:
             return 1
-    return response
+    result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return result.returncode
 
 #EXTRA "Interactive text based UI"
 def textual_interface():
@@ -598,7 +596,7 @@ def getIPaddresses(address, threads):
 
     if '/' in address: #CIDR notation detected
         try:
-            network = ipaddress.ip_network(address).hosts()
+            network = ipaddress.ip_network(address, strict=False).hosts()
             hosts = [str(ip) for ip in network]
             return hosts
         except:
@@ -680,18 +678,19 @@ def scan_port_connect(target, port, ifServiceScan):
                                 break
                         raw = ''.join(response) if response else None
 
-                        headers, _, body = raw.partition("\r\n\r\n")
+                        if raw:
+                            headers, _, body = raw.partition("\r\n\r\n")
 
-
-                        # Grab the Server line
-                        for line in headers.splitlines():
-                            line = line.strip()
-                            if line.lower().startswith("server:"):
-
-                                banner = line
-                                break
+                            # Grab the Server line
+                            for line in headers.splitlines():
+                                line = line.strip()
+                                if line.lower().startswith("server:"):
+                                    banner = line
+                                    break
+                            else:
+                                banner = headers.splitlines()[0]
                         else:
-                            banner = headers.splitlines()[0]
+                            banner = "NO BANNER"
 
                     except Exception:
                         banner = "NO BANNER"
@@ -1193,7 +1192,9 @@ def osDetection(hostOutput, host):
         for result in hostOutput:
             if len(result) >= 4:
                 port, service, state, banner = result
-                
+                if not banner:
+                    continue
+
                 for distro in linux_distros:
                     if distro.lower() in banner.lower():
                         return f"Linux ({distro})"
@@ -1303,7 +1304,7 @@ def getPorts(portMode, numberOfHosts, start, end, threads,scanType, inputPorts =
             case 'web':
                 listOfPorts = [80,443,8080,8443,8888,9000,9200,10000]
             case 'database':
-                listOfPorts = [1433,1521,3306,5432,27017,6479]
+                listOfPorts = [1433,1521,3306,5432,27017,6379]
             case 'mail':
                 listOfPorts = [25,465,587,110,995,143,993]
             case 'remoteAccess':
@@ -1811,7 +1812,7 @@ def main():
                     if args.end < 1 or args.end > 65535:
                         raise ValueError
             except ValueError:
-                print("Please enter a valid port number")
+                sys.exit("Please enter a valid port number")
 
 
 
